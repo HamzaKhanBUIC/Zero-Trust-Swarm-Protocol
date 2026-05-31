@@ -1,0 +1,127 @@
+// Package protocol defines the wire protocol for agent-to-agent messages.
+// Messages are length-prefixed JSON for simplicity and debuggability.
+package protocol
+
+import (
+	"crypto/ecdsa"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"io"
+	"time"
+)
+
+// MessageType identifies what kind of message this is.
+type MessageType string
+
+const (
+	TypeChat     MessageType = "CHAT"
+	TypeTask     MessageType = "TASK"
+	TypeResult   MessageType = "RESULT"
+	TypePing     MessageType = "PING"
+	TypePong     MessageType = "PONG"
+	TypeIdentity MessageType = "IDENTITY"
+	TypeRegister MessageType = "REGISTER"
+	TypeQuery    MessageType = "QUERY"
+	TypeGossip   MessageType = "GOSSIP" // Decentralized peer discovery
+)
+
+type Message struct {
+	Type      MessageType `json:"type"`
+	From      string      `json:"from"`
+	To        string      `json:"to"`
+	Payload   string      `json:"payload"`
+	Timestamp int64       `json:"timestamp"`
+	Signature string      `json:"signature,omitempty"` // Base64 encoded ECDSA signature of the Payload
+	TraceID   string      `json:"trace_id,omitempty"`  // OpenTelemetry Trace ID
+	SpanID    string      `json:"span_id,omitempty"`   // OpenTelemetry Span ID
+}
+
+// NewMessage creates a new message with the current timestamp.
+func NewMessage(msgType MessageType, from, to, payload string) *Message {
+	return &Message{
+		Type:      msgType,
+		From:      from,
+		To:        to,
+		Payload:   payload,
+		Timestamp: time.Now().UnixMilli(),
+	}
+}
+
+// WriteMessage writes a length-prefixed JSON message to the writer.
+// Format: [4 bytes big-endian length][JSON payload]
+func WriteMessage(w io.Writer, msg *Message) error {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal failed: %w", err)
+	}
+
+	// Write 4-byte length header
+	length := uint32(len(data))
+	if err := binary.Write(w, binary.BigEndian, length); err != nil {
+		return fmt.Errorf("write length failed: %w", err)
+	}
+
+	// Write payload
+	if _, err := w.Write(data); err != nil {
+		return fmt.Errorf("write payload failed: %w", err)
+	}
+	return nil
+}
+
+// ReadMessage reads a length-prefixed JSON message from the reader.
+func ReadMessage(r io.Reader) (*Message, error) {
+	// Read 4-byte length header
+	var length uint32
+	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
+		return nil, fmt.Errorf("read length failed: %w", err)
+	}
+
+	// Safety check: reject absurdly large messages (max 10MB)
+	if length > 10*1024*1024 {
+		return nil, fmt.Errorf("message too large: %d bytes", length)
+	}
+
+	// Read payload
+	data := make([]byte, length)
+	if _, err := io.ReadFull(r, data); err != nil {
+		return nil, fmt.Errorf("read payload failed: %w", err)
+	}
+
+	var msg Message
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return nil, fmt.Errorf("unmarshal failed: %w", err)
+	}
+	return &msg, nil
+}
+
+// Sign signs the message payload using the provided ECDSA private key.
+func (m *Message) Sign(privKey *ecdsa.PrivateKey) error {
+	hash := sha256.Sum256([]byte(m.Payload))
+	sigBytes, err := ecdsa.SignASN1(rand.Reader, privKey, hash[:])
+	if err != nil {
+		return err
+	}
+	m.Signature = base64.StdEncoding.EncodeToString(sigBytes)
+	return nil
+}
+
+// Verify verifies the message signature using the provided ECDSA public key.
+func (m *Message) Verify(pubKey *ecdsa.PublicKey) error {
+	if m.Signature == "" {
+		return fmt.Errorf("message has no signature")
+	}
+	sigBytes, err := base64.StdEncoding.DecodeString(m.Signature)
+	if err != nil {
+		return fmt.Errorf("invalid signature encoding: %v", err)
+	}
+	hash := sha256.Sum256([]byte(m.Payload))
+	valid := ecdsa.VerifyASN1(pubKey, hash[:], sigBytes)
+	if !valid {
+		return fmt.Errorf("invalid ECDSA signature for payload")
+	}
+	return nil
+}
