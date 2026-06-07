@@ -1,33 +1,26 @@
 # Contributing to Zero-Trust Swarm Protocol
 
-Welcome to the **Zero-Trust Swarm Protocol** (SwarmTLS). We are building the foundational transport and security layer for the future of autonomous, multi-agent artificial intelligence.
+First off, thank you for considering contributing to the Zero-Trust Swarm Protocol! We are building the foundational networking layer for the future of autonomous, multi-agent AI systems.
 
-Because this project sits at the critical intersection of Network Security, Cryptography, and AI, we have high standards for contributions.
-
-## 🎯 Current Engineering Priorities
-As outlined in the README, our primary focus areas are:
-1. **Post-Quantum Cryptography (PQC)**: We are looking for cryptographers to help implement Kyber/Dilithium for mTLS and payload signing.
-2. **QUIC / WebRTC Transport**: Moving away from raw TCP to support seamless NAT traversal for agents running on edge devices (laptops, phones) behind residential routers.
-3. **Zero-Knowledge Proofs (ZKPs)**: Implementing capability attestation without revealing the raw SPIFFE ID.
-
-## 🛠️ Development Guidelines
-
-### 1. Security First
-- This is a security protocol. Any changes to `transport.SwarmTLS`, the ECDSA payload signer, or the SPIFFE IdP logic must be accompanied by comprehensive tests and a mathematical justification if cryptography is altered.
-- **Never commit private keys or certificates.** All tests must use dynamically generated keys.
-
-### 2. Code Style (Go)
-- We strictly adhere to standard Go formatting. Run `go fmt` and `go vet` before submitting a PR.
-- Use explicit error handling. Avoid `panic()` in agent routines unless the error is fundamentally unrecoverable at boot.
-
-### 3. OpenTelemetry Integration
-- If you add a new logical component or task type to the swarm, you **must** instrument it with an OpenTelemetry Span. We rely on distributed tracing to debug the swarm's behavior across multiple nodes.
-
-## 🚀 Submitting a Pull Request
+## Getting Started
 1. Fork the repository.
-2. Create a feature branch (`git checkout -b feature/quic-transport`).
-3. Write your code and tests.
-4. Open a Pull Request against `main`. Provide a clear description of the problem solved, architecture changed, and attach any benchmark results if performance was affected.
+2. Clone your fork: `git clone https://github.com/your-username/Zero-Trust-Swarm-Protocol.git`
+3. Create your feature branch: `git checkout -b feature/amazing-feature`
+4. Run the demo to ensure your base environment is working: `.\run-demo.ps1`
 
----
-*By contributing, you agree that your code will be released under the MIT License.*
+## Areas of Contribution
+We are actively looking for elite engineering contributions in:
+* **Post-Quantum Cryptography**: Upgrading mTLS from ECDSA to lattice-based schemes.
+* **NAT Traversal**: Upgrading transport from raw TCP to WebRTC/QUIC for cross-network peer discovery.
+* **Zero-Knowledge Proofs**: Implementing cryptographic capability attestation.
+
+## Code Standards
+* All Go code must be formatted with `gofmt`.
+* Cryptographic functions must rely on the standard `crypto` libraries unless implementing a highly vetted external PQC library.
+* Any changes to `pkg/protocol` must be accompanied by updates to `pkg/protocol/protocol_test.go`.
+
+## Submitting a Pull Request
+1. Commit your changes: `git commit -m 'feat: Add amazing feature'`
+2. Push to the branch: `git push origin feature/amazing-feature`
+3. Open a Pull Request against the `main` branch.
+4. Ensure the GitHub Actions CI pipeline passes successfully.
