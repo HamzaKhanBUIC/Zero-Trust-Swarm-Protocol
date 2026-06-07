@@ -4,10 +4,17 @@
 
 # 🐝🛡️ Zero-Trust Swarm Protocol
 
+[![Open Source](https://img.shields.io/badge/Open%20Source-100%25-green?style=for-the-badge&logo=open-source-initiative)](https://github.com/HamzaKhanBUIC/Zero-Trust-Swarm-Protocol)
 [![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?style=for-the-badge&logo=go)](https://go.dev/)
 [![mTLS 1.3](https://img.shields.io/badge/Transport-mTLS_1.3-4B0082?style=for-the-badge&logo=lock)](https://datatracker.ietf.org/doc/html/rfc8446)
 [![ECDSA Signatures](https://img.shields.io/badge/Integrity-ECDSA_Signed-FF8C00?style=for-the-badge&logo=shield)](https://en.wikipedia.org/wiki/Elliptic_Curve_Digital_Signature_Algorithm)
 [![SPIFFE](https://img.shields.io/badge/Identity-SPIFFE-green?style=for-the-badge&logo=spiffe)](https://spiffe.io/)
+
+> 👋 **Welcome to the Zero-Trust Swarm!** This project is entirely **Open Source**. We invite developers, security engineers, and AI researchers from around the world to clone the repo, try out the 1-click demo, and build the future of secure autonomous AI orchestration with us. Jump down to the [Contributing](#-contributing) section to get involved!
+
+</div>
+
+## 🚀 The Vision
 
 *A mathematically secure, decentralized transport layer for autonomous AI agents operating in hostile networks.*
 
