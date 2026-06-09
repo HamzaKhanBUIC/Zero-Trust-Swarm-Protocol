@@ -27,8 +27,26 @@ type QueryResponse struct {
 }
 
 func NewSwarmRegistry() *SwarmRegistry {
-	return &SwarmRegistry{
+	r := &SwarmRegistry{
 		agents: make(map[string]*AgentRecord),
+	}
+	go r.cleanupRoutine()
+	return r
+}
+
+// cleanupRoutine periodically sweeps the registry and permanently deletes stale agents
+// from memory to prevent Out-Of-Memory (OOM) crashes during long uptimes.
+func (r *SwarmRegistry) cleanupRoutine() {
+	for {
+		time.Sleep(1 * time.Minute)
+		r.mu.Lock()
+		now := time.Now()
+		for id, rec := range r.agents {
+			if now.Sub(rec.LastSeen) > 1*time.Minute {
+				delete(r.agents, id)
+			}
+		}
+		r.mu.Unlock()
 	}
 }
 

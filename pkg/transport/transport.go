@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"time"
@@ -95,10 +96,11 @@ func (l *swarmListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 
+	// Use io.ReadFull to prevent TCP fragmentation issues
 	prefixBuf := make([]byte, len(ProtocolPrefix))
-	if _, err := rawConn.Read(prefixBuf); err != nil {
+	if _, err := io.ReadFull(rawConn, prefixBuf); err != nil {
 		rawConn.Close()
-		return nil, fmt.Errorf("failed to read protocol prefix: %w", err)
+		return nil, fmt.Errorf("failed to fully read protocol prefix: %w", err)
 	}
 
 	if string(prefixBuf) != ProtocolPrefix {

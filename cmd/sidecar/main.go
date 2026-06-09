@@ -173,7 +173,10 @@ func (s *Sidecar) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var qResp registry.QueryResponse
-	json.Unmarshal([]byte(resp.Payload), &qResp)
+	if err := json.Unmarshal([]byte(resp.Payload), &qResp); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to decode registry response: %v", err), http.StatusInternalServerError)
+		return
+	}
 
 	if len(qResp.Agents) == 0 {
 		http.Error(w, fmt.Sprintf("No active swarm agents found with capability: %s", targetCapability), http.StatusNotFound)
