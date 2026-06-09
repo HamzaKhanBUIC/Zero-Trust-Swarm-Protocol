@@ -85,7 +85,16 @@ In a highly asynchronous swarm, tracing an agent's reasoning chain across multip
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Docker - Recommended)
+
+The entire Zero-Trust Swarm (Identity Provider, Registry, 1 Agent, and the Python Sidecar Proxy) can be launched instantly via Docker:
+
+```bash
+docker-compose up --build
+```
+*The Sidecar proxy will be bound to `localhost:8080`. You can immediately run the Python Agent demo!*
+
+## 🛠️ Manual Installation (Go 1.22+)
 
 1. Start the Identity Provider Daemon:
 ```bash
