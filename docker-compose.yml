@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  idp-daemon:
+    build: .
+    container_name: swarm-idp
+    command: ["./idp-daemon", "--listen", "0.0.0.0:23790"]
+    networks:
+      - swarm-net
+
+  registry:
+    build: .
+    container_name: swarm-registry
+    command: ["./registry", "--listen", "0.0.0.0:9000"]
+    environment:
+      - IDP_HOST=swarm-idp:23790
+    depends_on:
+      - idp-daemon
+    networks:
+      - swarm-net
+
+  agent-alpha:
+    build: .
+    container_name: swarm-agent-alpha
+    command: ["./agent", "--id", "agent-alpha", "--listen", "0.0.0.0:9101", "--caps", "math-solver", "--registry", "swarm-registry:9000"]
+    environment:
+      - IDP_HOST=swarm-idp:23790
+    depends_on:
+      - registry
+    networks:
+      - swarm-net
+
+  sidecar:
+    build: .
+    container_name: swarm-sidecar
+    command: ["./sidecar", "--id", "agent-sidecar", "--listen", "0.0.0.0:8080", "--registry", "swarm-registry:9000"]
+    environment:
+      - IDP_HOST=swarm-idp:23790
+    ports:
+      - "8080:8080" # Exposed to the host so Python scripts can hit it!
+    depends_on:
+      - agent-alpha
+    networks:
+      - swarm-net
+
+networks:
+  swarm-net:
+    driver: bridge
