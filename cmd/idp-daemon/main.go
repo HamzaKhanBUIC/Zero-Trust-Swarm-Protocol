@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -19,6 +20,9 @@ import (
 const certsDir = ".certs"
 
 func main() {
+	listenAddr := flag.String("listen", fmt.Sprintf("127.0.0.1:%d", idp.WorkloadAPIPort), "Address to listen on")
+	flag.Parse()
+
 	fmt.Println("╔══════════════════════════════════════════════╗")
 	fmt.Println("║   Zero-Trust Swarm — Workload Identity Daemon║")
 	fmt.Println("╚══════════════════════════════════════════════╝")
@@ -33,13 +37,12 @@ func main() {
 	fmt.Println("  ✓ Swarm CA loaded successfully.")
 
 	// 2. Start Local IPC Listener
-	addr := fmt.Sprintf("127.0.0.1:%d", idp.WorkloadAPIPort)
-	ln, err := net.Listen("tcp", addr)
+	ln, err := net.Listen("tcp", *listenAddr)
 	if err != nil {
-		log.Fatalf("Failed to bind to Workload IPC address %s: %v", addr, err)
+		log.Fatalf("Failed to bind to Workload IPC address %s: %v", *listenAddr, err)
 	}
 	defer ln.Close()
-	fmt.Printf("👂 Workload Identity API listening on %s (strict local-only loopback)\n\n", addr)
+	fmt.Printf("👂 Workload Identity API listening on %s (strict local-only loopback unless overridden)\n\n", *listenAddr)
 
 	// Graceful shutdown
 	go func() {

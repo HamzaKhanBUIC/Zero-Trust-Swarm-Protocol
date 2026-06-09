@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"time"
 )
 
@@ -26,7 +27,12 @@ type IdentityResponse struct {
 
 // FetchIdentity connects to the local IdP daemon and retrieves dynamic credentials in-memory.
 func FetchIdentity(agentID string) (*IdentityResponse, error) {
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", WorkloadAPIPort), 5*time.Second)
+	idpHost := os.Getenv("IDP_HOST")
+	if idpHost == "" {
+		idpHost = fmt.Sprintf("127.0.0.1:%d", WorkloadAPIPort)
+	}
+	
+	conn, err := net.DialTimeout("tcp", idpHost, 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Identity Provider (IdP) daemon: %w. Is the idp-daemon running?", err)
 	}
