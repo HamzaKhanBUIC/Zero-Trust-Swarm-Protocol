@@ -8,7 +8,8 @@ RUN go mod download
 
 COPY . .
 
-# Build all binaries
+# Build all binaries statically
+ENV CGO_ENABLED=0
 RUN go build -o /bin/idp-daemon ./cmd/idp-daemon
 RUN go build -o /bin/registry ./cmd/registry
 RUN go build -o /bin/agent ./cmd/agent
