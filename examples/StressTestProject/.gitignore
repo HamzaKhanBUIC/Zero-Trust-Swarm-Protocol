@@ -1,0 +1,7 @@
+
+# Ignore local AI Memory Graphs and MCP configs
+*.sqlite
+*.db
+.codeium/
+.cursor/
+mcp_config.json
