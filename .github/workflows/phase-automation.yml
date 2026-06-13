@@ -1,0 +1,83 @@
+name: 🏗️ Phase Auto-Completion
+
+# Automatically checks off the current phase in PROJECT_CHARTER.md
+# when a PR with a matching phase label is merged into main.
+#
+# HOW TO USE:
+# When you merge a PR, add one of these labels to it:
+#   - phase-1-complete
+#   - phase-2-complete
+#   - phase-3-complete
+#   - phase-4-complete
+#   - phase-5-complete
+# The action will auto-check that phase in docs/PROJECT_CHARTER.md.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  auto-check-phase:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Detect phase label on merged PR
+        id: detect-phase
+        run: |
+          LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
+          echo "PR labels: $LABELS"
+
+          PHASE=""
+          if echo "$LABELS" | grep -q "phase-1-complete"; then PHASE="1"; fi
+          if echo "$LABELS" | grep -q "phase-2-complete"; then PHASE="2"; fi
+          if echo "$LABELS" | grep -q "phase-3-complete"; then PHASE="3"; fi
+          if echo "$LABELS" | grep -q "phase-4-complete"; then PHASE="4"; fi
+          if echo "$LABELS" | grep -q "phase-5-complete"; then PHASE="5"; fi
+
+          echo "phase=$PHASE" >> $GITHUB_OUTPUT
+
+      - name: Check off phase in PROJECT_CHARTER.md
+        if: steps.detect-phase.outputs.phase != ''
+        run: |
+          PHASE=${{ steps.detect-phase.outputs.phase }}
+          CHARTER="docs/PROJECT_CHARTER.md"
+
+          echo "✅ Marking Phase $PHASE as complete in $CHARTER"
+
+          # Replace [ ] with [x] for the matched phase line
+          sed -i "s/- \[ \] \*\*Phase $PHASE:/- [x] **Phase $PHASE:/" "$CHARTER"
+
+          echo "Charter after update:"
+          grep "Phase" "$CHARTER"
+
+      - name: Commit updated charter
+        if: steps.detect-phase.outputs.phase != ''
+        run: |
+          PHASE=${{ steps.detect-phase.outputs.phase }}
+          git config user.name "AI Empire Bot"
+          git config user.email "ai-empire-bot@noreply.github.com"
+          git add docs/PROJECT_CHARTER.md
+          git commit -m "✅ auto: Phase $PHASE marked complete [skip ci]" || echo "No changes to commit"
+          git push
+
+      - name: Comment on PR
+        if: steps.detect-phase.outputs.phase != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const phase = '${{ steps.detect-phase.outputs.phase }}';
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `🏗️ **AI Empire Bot**: Phase ${phase} has been automatically marked complete in \`docs/PROJECT_CHARTER.md\`. The Lead Architect may now authorize Phase ${parseInt(phase)+1}.`
+            });

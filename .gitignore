@@ -1,27 +1,30 @@
-# Generated certificates
-.certs/
+# Ignore local AI Memory Graphs and MCP configs
+*.sqlite
+*.db
+.codeium/
+.cursor/
+mcp_config.json
 
-# Go binaries
+# AI Empire & Agent Configs (Do not push to prod)
+AGENTS.md
+AGENT_RULES.md
+FOLDER_CONTRACT_*.md
+GEMINI.md
+STATE.md
+SCOPE_CREEP_LOG.md
+PROJECT_DNA.md
+.windsurfrules
+.claudecode
+.agentrules
+docs/PROJECT_CHARTER.md
+docs/KICKOFF_PROTOCOL.md
+docs/MEDIUM_CHARTER.md
+docs/rules/
+claude.md
+agentguidelines.md
+
+# Compiled binaries and local DBs
 *.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-
-# Go test output
-*.test
-*.out
-*.prof
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Rust (sidecar)
-sidecar/target/
+.certs/
+dashboard/node_modules/
+sidecar_queue.db

@@ -15,6 +15,7 @@ import (
 
 	"github.com/hamza-imran/zero-trust-swarm/pkg/idp"
 	"github.com/hamza-imran/zero-trust-swarm/pkg/protocol"
+	"github.com/hamza-imran/zero-trust-swarm/pkg/queue"
 	"github.com/hamza-imran/zero-trust-swarm/pkg/registry"
 	"github.com/hamza-imran/zero-trust-swarm/pkg/transport"
 )
@@ -49,6 +50,7 @@ type Sidecar struct {
 	SwarmTLS     *transport.SwarmTLS
 	PrivKey      *ecdsa.PrivateKey
 	RegistryAddr string
+	TaskQueue    *queue.TaskQueue
 }
 
 func main() {
@@ -112,14 +114,25 @@ func main() {
 		CACertPool: caPool,
 	}
 
+	// Initialize Persistent Task Queue
+	q, err := queue.NewTaskQueue("sidecar_queue.db")
+	if err != nil {
+		log.Fatalf("❌ Failed to initialize SQLite task queue: %v", err)
+	}
+	defer q.Close()
+
 	s := &Sidecar{
 		AgentID:      *id,
 		SwarmTLS:     swarmTLS,
 		PrivKey:      ecdsaPrivKey,
 		RegistryAddr: *registryAddr,
+		TaskQueue:    q,
 	}
 
+	go s.retryQueueLoop()
+
 	http.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
+	http.HandleFunc("/v1/tasks/async", s.handleAsyncTask)
 
 	fmt.Printf("[2/2]👂 Sidecar Proxy running on http://%s\n", *listen)
 	log.Fatal(http.ListenAndServe(*listen, nil))
@@ -229,4 +242,95 @@ func (s *Sidecar) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(aiResp)
+}
+
+type AsyncRequest struct {
+	TargetID string `json:"target_id"`
+	Payload  string `json:"payload"`
+}
+
+func (s *Sidecar) handleAsyncTask(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req AsyncRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	msg := protocol.NewMessage(protocol.TypeTask, s.AgentID, req.TargetID, req.Payload)
+	msg.Sign(s.PrivKey)
+
+	// Persistently enqueue the message
+	if err := s.TaskQueue.Enqueue(req.TargetID, msg); err != nil {
+		http.Error(w, "Failed to enqueue task", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{"status": "queued", "target": req.TargetID})
+}
+
+// retryQueueLoop periodically checks the SQLite database for pending messages and attempts to deliver them.
+func (s *Sidecar) retryQueueLoop() {
+	ticker := time.NewTicker(15 * time.Second)
+	for range ticker.C {
+		msgs, err := s.TaskQueue.FetchAll()
+		if err != nil || len(msgs) == 0 {
+			continue
+		}
+
+		log.Printf("🔄 Retrying %d pending background tasks from SQLite queue...", len(msgs))
+
+		for _, qm := range msgs {
+			// First query the registry for the target ID's actual address
+			conn, err := s.SwarmTLS.Dial(s.RegistryAddr)
+			if err != nil {
+				continue
+			}
+
+			// We query by exact agent ID to find their address
+			// Note: If TargetID is a capability, we can query that instead, but assuming exact ID here.
+			// The protocol needs an update to allow querying by agent ID, but we can query all and filter locally for now.
+			queryMsg := protocol.NewMessage(protocol.TypeQuery, s.AgentID, "swarm-registry", "")
+			queryMsg.Sign(s.PrivKey)
+			protocol.WriteMessage(conn, queryMsg)
+
+			resp, err := protocol.ReadMessage(conn)
+			conn.Close()
+			if err != nil {
+				continue
+			}
+
+			var qResp registry.QueryResponse
+			json.Unmarshal([]byte(resp.Payload), &qResp)
+
+			var targetAddr string
+			for _, a := range qResp.Agents {
+				if a.AgentID == qm.TargetID {
+					targetAddr = a.Address
+					break
+				}
+			}
+
+			if targetAddr == "" {
+				continue // Peer offline or not found
+			}
+
+			peerConn, err := s.SwarmTLS.Dial(targetAddr)
+			if err != nil {
+				continue
+			}
+
+			if err := protocol.WriteMessage(peerConn, qm.Message); err == nil {
+				// Sent successfully, delete from persistent queue
+				peerConn.Close()
+				s.TaskQueue.Delete(qm.ID)
+				log.Printf("✅ Delivered queued task to %s", qm.TargetID)
+			}
+		}
+	}
 }

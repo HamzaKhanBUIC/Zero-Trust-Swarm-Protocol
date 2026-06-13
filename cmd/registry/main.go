@@ -100,6 +100,11 @@ func main() {
 
 	// 3. Start Swarm Registry service
 	reg := registry.NewSwarmRegistry()
+	
+	// Start Dashboard UI Server
+	dashServer := registry.NewServer(reg)
+	go dashServer.Start("127.0.0.1:3000")
+
 	ln, err := swarmTLS.Listen(*listen)
 	if err != nil {
 		log.Fatalf("Failed to listen on %s: %v", *listen, err)
@@ -122,11 +127,11 @@ func main() {
 		if err != nil {
 			break
 		}
-		go handleRegistryClient(conn, swarmTLS, reg, ecdsaPrivKey, policyEngine)
+		go handleRegistryClient(conn, swarmTLS, reg, dashServer, ecdsaPrivKey, policyEngine)
 	}
 }
 
-func handleRegistryClient(conn net.Conn, swarmTLS *transport.SwarmTLS, reg *registry.SwarmRegistry, privKey *ecdsa.PrivateKey, engine *policy.Engine) {
+func handleRegistryClient(conn net.Conn, swarmTLS *transport.SwarmTLS, reg *registry.SwarmRegistry, dashServer *registry.Server, privKey *ecdsa.PrivateKey, engine *policy.Engine) {
 	defer conn.Close()
 	tlsConn := conn.(*tls.Conn)
 
@@ -158,6 +163,7 @@ func handleRegistryClient(conn net.Conn, swarmTLS *transport.SwarmTLS, reg *regi
 	// Zero-Trust Policy Check
 	if !engine.Evaluate(peerID, msg.Type) {
 		log.Printf("⛔ [POLICY DENY] Action %s denied for principal %s", msg.Type, peerID)
+		dashServer.BroadcastEvent("deny", peerID, fmt.Sprintf("Policy denied action %s", msg.Type))
 		reply := protocol.NewMessage(protocol.TypeResult, "swarm-registry", peerID, "⛔ POLICY DENY: Unauthorized")
 		reply.Sign(privKey)
 		protocol.WriteMessage(conn, reply)
@@ -174,6 +180,7 @@ func handleRegistryClient(conn net.Conn, swarmTLS *transport.SwarmTLS, reg *regi
 		}
 		reg.Register(rec.AgentID, rec.Address, rec.Capabilities)
 		log.Printf("📝 Registered Agent: %s, Address: %s, Capabilities: %v", rec.AgentID, rec.Address, rec.Capabilities)
+		dashServer.BroadcastEvent("register", rec.AgentID, fmt.Sprintf("Registered capabilities: %v", rec.Capabilities))
 
 		reply := protocol.NewMessage(protocol.TypeResult, "swarm-registry", peerID, "SUCCESS")
 		reply.Sign(privKey)
@@ -183,6 +190,8 @@ func handleRegistryClient(conn net.Conn, swarmTLS *transport.SwarmTLS, reg *regi
 		// Message payload contains requested capability (if any)
 		reqCap := msg.Payload
 		records := reg.Query(reqCap)
+		
+		dashServer.BroadcastEvent("query", peerID, fmt.Sprintf("Queried capability: %s", reqCap))
 
 		respBytes, _ := json.Marshal(registry.QueryResponse{Agents: records})
 		reply := protocol.NewMessage(protocol.TypeResult, "swarm-registry", peerID, string(respBytes))
