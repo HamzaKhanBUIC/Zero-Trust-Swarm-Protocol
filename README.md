@@ -1,6 +1,12 @@
 <div align="center">
   <h1>⚡ Zero-Trust Swarm Protocol</h1>
   <p><strong>Secure, Scalable mTLS Inter-Agent Communication Network</strong></p>
+  <p>
+    <img src="https://img.shields.io/badge/Go-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go" />
+    <img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
+    <img src="https://img.shields.io/badge/Docker-2CA5E0?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
+    <img src="https://img.shields.io/badge/Security-mTLS_1.3-success?style=for-the-badge" alt="mTLS 1.3" />
+  </p>
 </div>
 
 ---
