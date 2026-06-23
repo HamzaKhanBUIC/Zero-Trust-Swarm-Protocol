@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 )
 
 //go:embed dist/*
@@ -31,7 +32,7 @@ func NewServer(reg *SwarmRegistry) *Server {
 // BroadcastEvent sends an event to all connected SSE clients.
 func (s *Server) BroadcastEvent(eventType, agentID, message string) {
 	ev := map[string]string{
-		"time":     fmt.Sprintf("%s", http.TimeFormat(nil)),
+		"time":     time.Now().Format(http.TimeFormat),
 		"type":     eventType,
 		"agent_id": agentID,
 		"message":  message,
