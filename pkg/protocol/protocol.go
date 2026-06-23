@@ -15,6 +15,7 @@ import (
 )
 
 // MessageType identifies what kind of message this is.
+// The protocol supports a variety of types for chatting, routing tasks, and system telemetry.
 type MessageType string
 
 const (
@@ -29,6 +30,8 @@ const (
 	TypeGossip   MessageType = "GOSSIP" // Decentralized peer discovery
 )
 
+// Message is the standard container for all agent-to-agent and sidecar-to-registry communication.
+// It enforces cryptographic signing of payloads to prevent tampering, and supports OpenTelemetry tracing.
 type Message struct {
 	Type      MessageType `json:"type"`
 	From      string      `json:"from"`
