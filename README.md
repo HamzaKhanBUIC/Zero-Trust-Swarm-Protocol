@@ -37,3 +37,17 @@ docker-compose up --build
 ```
 
 Then visit `http://127.0.0.1:3000` to view the Dashboard.
+
+---
+
+## ⚠️ Troubleshooting
+
+**Windows Users (Screen Stuttering during `docker-compose up --build`):**
+If you experience your mouse or screen stuttering while compiling the Go microservices on Windows, don't worry—your hardware is safe! This is a known issue where Docker Desktop's WSL2 backend (`vmmem`) temporarily consumes large amounts of RAM during heavy compilation tasks. 
+
+**Fix:** Create a `.wslconfig` file in your Windows user directory (`C:\Users\YourName\.wslconfig`) with the following limits:
+```ini
+[wsl2]
+memory=4GB
+processors=2
+```
