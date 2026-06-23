@@ -31,7 +31,7 @@ services:
   sidecar:
     build: .
     container_name: swarm-sidecar
-    command: ["./sidecar", "--id", "agent-sidecar", "--listen", "0.0.0.0:8080", "--registry", "swarm-registry:9000"]
+    command: ["./sidecar", "--id", "agent-sidecar", "--listen", "0.0.0.0:8080", "--listen-mtls", "0.0.0.0:9102", "--caps", "data-analyzer", "--upstream", "http://host.docker.internal:5000/", "--registry", "swarm-registry:9000"]
     environment:
       - IDP_HOST=swarm-idp:23790
     ports:
