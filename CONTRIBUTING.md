@@ -6,13 +6,15 @@ First off, thank you for considering contributing to the Zero-Trust Swarm Protoc
 1. Fork the repository.
 2. Clone your fork: `git clone https://github.com/your-username/Zero-Trust-Swarm-Protocol.git`
 3. Create your feature branch: `git checkout -b feature/amazing-feature`
-4. Run the demo to ensure your base environment is working: `.\run-demo.ps1`
+4. Start the swarm environment locally via Docker: `docker-compose up --build`
+5. Test the Python SDK: `python test_agent.py`
 
 ## Areas of Contribution
 We are actively looking for elite engineering contributions in:
+* **React Frontend**: Building out the `Swarm Visualizer Dashboard` using React Flow and Server-Sent Events.
+* **Python SDK LLM Integration**: Adding LangChain, OpenAI, and Gemini support to the native Python agent.
 * **Post-Quantum Cryptography**: Upgrading mTLS from ECDSA to lattice-based schemes.
 * **NAT Traversal**: Upgrading transport from raw TCP to WebRTC/QUIC for cross-network peer discovery.
-* **Zero-Knowledge Proofs**: Implementing cryptographic capability attestation.
 
 ## Code Standards
 * All Go code must be formatted with `gofmt`.
