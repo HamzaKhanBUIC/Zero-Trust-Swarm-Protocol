@@ -1,19 +1,25 @@
 // Command sidecar runs a localhost HTTP proxy that exposes an OpenAI-compatible REST API.
 // It translates incoming Python/Node.js JSON requests into ECDSA-signed mTLS Zero-Trust Swarm messages.
+// It also acts as an Ingress reverse-proxy to allow Python agents to serve capabilities.
 package main
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hamza-imran/zero-trust-swarm/pkg/idp"
+	"github.com/hamza-imran/zero-trust-swarm/pkg/policy"
 	"github.com/hamza-imran/zero-trust-swarm/pkg/protocol"
 	"github.com/hamza-imran/zero-trust-swarm/pkg/queue"
 	"github.com/hamza-imran/zero-trust-swarm/pkg/registry"
@@ -51,12 +57,17 @@ type Sidecar struct {
 	PrivKey      *ecdsa.PrivateKey
 	RegistryAddr string
 	TaskQueue    *queue.TaskQueue
+	UpstreamURL  string
+	PolicyEngine *policy.Engine
 }
 
 func main() {
 	id := flag.String("id", "agent-sidecar", "Sidecar identity (attested by IdP)")
 	listen := flag.String("listen", "127.0.0.1:8080", "HTTP port to expose OpenAI-compatible API")
 	registryAddr := flag.String("registry", "127.0.0.1:9000", "Discovery registry address")
+	listenMtls := flag.String("listen-mtls", "", "Port to listen for incoming secure Swarm connections (e.g. 127.0.0.1:8081)")
+	upstream := flag.String("upstream", "http://127.0.0.1:5000/webhook", "Local HTTP URL of the Python agent for incoming tasks")
+	capsFlag := flag.String("caps", "", "Comma-separated capabilities to register with the Swarm")
 	flag.Parse()
 
 	fmt.Println("╔══════════════════════════════════════════════╗")
@@ -121,21 +132,156 @@ func main() {
 	}
 	defer q.Close()
 
+	engine := policy.NewEngine([]policy.Rule{
+		{
+			Effect:     policy.Allow,
+			Principals: []string{"spiffe://swarm.local/agent/*"}, // Allow registered agents to connect
+			Actions:    []protocol.MessageType{protocol.TypeTask, protocol.TypePing, protocol.TypeResult},
+		},
+	})
+
 	s := &Sidecar{
 		AgentID:      *id,
 		SwarmTLS:     swarmTLS,
 		PrivKey:      ecdsaPrivKey,
 		RegistryAddr: *registryAddr,
 		TaskQueue:    q,
+		UpstreamURL:  *upstream,
+		PolicyEngine: engine,
 	}
 
 	go s.retryQueueLoop()
 
+	if *listenMtls != "" {
+		fmt.Printf("[2/2]👂 Sidecar Ingress mTLS listening on %s -> forwarding to %s\n", *listenMtls, *upstream)
+		go s.runIngressListener(*listenMtls)
+
+		if *capsFlag != "" {
+			caps := strings.Split(*capsFlag, ",")
+			for i := range caps {
+				caps[i] = strings.TrimSpace(caps[i])
+			}
+			go s.runHeartbeatLoop(*listenMtls, caps)
+		}
+	}
+
 	http.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
 	http.HandleFunc("/v1/tasks/async", s.handleAsyncTask)
 
-	fmt.Printf("[2/2]👂 Sidecar Proxy running on http://%s\n", *listen)
+	fmt.Printf("[2/2]👂 Sidecar Egress Proxy running on http://%s\n", *listen)
 	log.Fatal(http.ListenAndServe(*listen, nil))
+}
+
+func (s *Sidecar) runIngressListener(addr string) {
+	ln, err := s.SwarmTLS.Listen(addr)
+	if err != nil {
+		log.Fatalf("Listen failed: %v", err)
+	}
+	defer ln.Close()
+
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			log.Printf("Accept error: %v", err)
+			continue
+		}
+		go s.handleIncomingSwarmConnection(conn)
+	}
+}
+
+func (s *Sidecar) handleIncomingSwarmConnection(conn net.Conn) {
+	defer conn.Close()
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		return
+	}
+
+	if err := tlsConn.Handshake(); err != nil {
+		log.Printf("❌ TLS handshake failed: %v", err)
+		return
+	}
+
+	peerID := transport.ExtractPeerID(tlsConn)
+
+	msg, err := protocol.ReadMessage(conn)
+	if err != nil {
+		log.Printf("Read error: %v", err)
+		return
+	}
+	
+	if len(tlsConn.ConnectionState().PeerCertificates) > 0 {
+		peerPubKey, ok := tlsConn.ConnectionState().PeerCertificates[0].PublicKey.(*ecdsa.PublicKey)
+		if ok {
+			if err := msg.Verify(peerPubKey); err != nil {
+				log.Printf("❌ [INTEGRITY FAILURE] Payload signature invalid from %s: %v", peerID, err)
+				return
+			}
+		}
+	}
+
+	if !s.PolicyEngine.Evaluate(peerID, msg.Type) {
+		log.Printf("⛔ [POLICY DENY] Action %s denied for principal %s", msg.Type, peerID)
+		reply := protocol.NewMessage(protocol.TypeResult, s.AgentID, msg.From, "⛔ POLICY DENY: Unauthorized")
+		reply.Sign(s.PrivKey)
+		protocol.WriteMessage(conn, reply)
+		return
+	}
+
+	var reply *protocol.Message
+	switch msg.Type {
+	case protocol.TypeTask:
+		// Forward task payload to Python Upstream
+		reqBody, _ := json.Marshal(map[string]string{
+			"sender":  msg.From,
+			"payload": msg.Payload,
+		})
+		
+		httpResp, err := http.Post(s.UpstreamURL, "application/json", bytes.NewBuffer(reqBody))
+		if err != nil {
+			log.Printf("⚠️ Failed to forward task to upstream %s: %v", s.UpstreamURL, err)
+			reply = protocol.NewMessage(protocol.TypeResult, s.AgentID, msg.From, "ERROR: Python agent unreachable")
+		} else {
+			defer httpResp.Body.Close()
+			bodyBytes, _ := io.ReadAll(httpResp.Body)
+			reply = protocol.NewMessage(protocol.TypeResult, s.AgentID, msg.From, string(bodyBytes))
+		}
+	case protocol.TypePing:
+		reply = protocol.NewMessage(protocol.TypePong, s.AgentID, msg.From, "PONG")
+	default:
+		reply = protocol.NewMessage(protocol.TypeResult, s.AgentID, msg.From, "Unsupported message type")
+	}
+
+	reply.Sign(s.PrivKey)
+	protocol.WriteMessage(conn, reply)
+}
+
+func (s *Sidecar) runHeartbeatLoop(listenAddr string, caps []string) {
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+
+	register := func() {
+		conn, err := s.SwarmTLS.Dial(s.RegistryAddr)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		rec := registry.AgentRecord{
+			AgentID:      s.AgentID,
+			Address:      listenAddr,
+			Capabilities: caps,
+		}
+		recBytes, _ := json.Marshal(rec)
+
+		msg := protocol.NewMessage(protocol.TypeRegister, s.AgentID, "swarm-registry", string(recBytes))
+		msg.Sign(s.PrivKey)
+		protocol.WriteMessage(conn, msg)
+	}
+
+	register()
+	for range ticker.C {
+		register()
+	}
 }
 
 func (s *Sidecar) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -155,19 +301,14 @@ func (s *Sidecar) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// 1. The requested model is mapped directly to a Swarm Capability
 	targetCapability := req.Model
 	if targetCapability == "" {
 		http.Error(w, "Model (capability) must be specified", http.StatusBadRequest)
 		return
 	}
 
-	// The last message is the task payload
 	taskPayload := req.Messages[len(req.Messages)-1].Content
 
-	log.Printf("🤖 Received local HTTP request to invoke swarm capability: %q", targetCapability)
-
-	// 2. Query Swarm Registry
 	conn, err := s.SwarmTLS.Dial(s.RegistryAddr)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to connect to registry: %v", err), http.StatusInternalServerError)
@@ -186,10 +327,7 @@ func (s *Sidecar) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var qResp registry.QueryResponse
-	if err := json.Unmarshal([]byte(resp.Payload), &qResp); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to decode registry response: %v", err), http.StatusInternalServerError)
-		return
-	}
+	json.Unmarshal([]byte(resp.Payload), &qResp)
 
 	if len(qResp.Agents) == 0 {
 		http.Error(w, fmt.Sprintf("No active swarm agents found with capability: %s", targetCapability), http.StatusNotFound)
@@ -197,9 +335,7 @@ func (s *Sidecar) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	target := qResp.Agents[0]
-	log.Printf("🚀 Found peer over mTLS: %s at %s", target.AgentID, target.Address)
 
-	// 3. Dial Target Peer
 	peerConn, err := s.SwarmTLS.Dial(target.Address)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to connect to peer %s: %v", target.AgentID, err), http.StatusInternalServerError)
@@ -207,22 +343,17 @@ func (s *Sidecar) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 	defer peerConn.Close()
 
-	// 4. Wrap LLM Task & Send
 	taskMsg := protocol.NewMessage(protocol.TypeTask, s.AgentID, target.AgentID, taskPayload)
 	taskMsg.MaxTokens = req.MaxTokens
 	taskMsg.Sign(s.PrivKey)
 	protocol.WriteMessage(peerConn, taskMsg)
 
-	// 5. Wait for Peer Result
 	resultMsg, err := protocol.ReadMessage(peerConn)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to read result from peer: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("🏆 Task executed successfully by %s", target.AgentID)
-
-	// 6. Format back into OpenAI REST schema
 	aiResp := OpenAIResponse{
 		ID:      fmt.Sprintf("chatcmpl-%d", time.Now().Unix()),
 		Object:  "chat.completion",
@@ -264,8 +395,7 @@ func (s *Sidecar) handleAsyncTask(w http.ResponseWriter, r *http.Request) {
 	msg := protocol.NewMessage(protocol.TypeTask, s.AgentID, req.TargetID, req.Payload)
 	msg.Sign(s.PrivKey)
 
-	// Persistently enqueue the message
-	if err := s.TaskQueue.Enqueue(req.TargetID, msg); err != nil {
+	if err := s.TaskQueue.Enqueue(req.TargetID, *msg); err != nil {
 		http.Error(w, "Failed to enqueue task", http.StatusInternalServerError)
 		return
 	}
@@ -274,7 +404,6 @@ func (s *Sidecar) handleAsyncTask(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "queued", "target": req.TargetID})
 }
 
-// retryQueueLoop periodically checks the SQLite database for pending messages and attempts to deliver them.
 func (s *Sidecar) retryQueueLoop() {
 	ticker := time.NewTicker(15 * time.Second)
 	for range ticker.C {
@@ -283,18 +412,12 @@ func (s *Sidecar) retryQueueLoop() {
 			continue
 		}
 
-		log.Printf("🔄 Retrying %d pending background tasks from SQLite queue...", len(msgs))
-
 		for _, qm := range msgs {
-			// First query the registry for the target ID's actual address
 			conn, err := s.SwarmTLS.Dial(s.RegistryAddr)
 			if err != nil {
 				continue
 			}
 
-			// We query by exact agent ID to find their address
-			// Note: If TargetID is a capability, we can query that instead, but assuming exact ID here.
-			// The protocol needs an update to allow querying by agent ID, but we can query all and filter locally for now.
 			queryMsg := protocol.NewMessage(protocol.TypeQuery, s.AgentID, "swarm-registry", "")
 			queryMsg.Sign(s.PrivKey)
 			protocol.WriteMessage(conn, queryMsg)
@@ -317,7 +440,7 @@ func (s *Sidecar) retryQueueLoop() {
 			}
 
 			if targetAddr == "" {
-				continue // Peer offline or not found
+				continue
 			}
 
 			peerConn, err := s.SwarmTLS.Dial(targetAddr)
@@ -325,11 +448,9 @@ func (s *Sidecar) retryQueueLoop() {
 				continue
 			}
 
-			if err := protocol.WriteMessage(peerConn, qm.Message); err == nil {
-				// Sent successfully, delete from persistent queue
+			if err := protocol.WriteMessage(peerConn, &qm.Message); err == nil {
 				peerConn.Close()
 				s.TaskQueue.Delete(qm.ID)
-				log.Printf("✅ Delivered queued task to %s", qm.TargetID)
 			}
 		}
 	}
