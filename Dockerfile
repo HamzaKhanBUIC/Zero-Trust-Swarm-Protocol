@@ -1,12 +1,9 @@
 # Multi-stage build for Zero-Trust Swarm
-FROM golang:1.22-alpine AS builder
+FROM golang:alpine AS builder
 
 WORKDIR /app
-COPY go.mod ./
-# COPY go.sum ./ (Uncomment if using dependencies)
-RUN go mod download
-
 COPY . .
+RUN go mod tidy
 
 # Build all binaries statically
 ENV CGO_ENABLED=0
