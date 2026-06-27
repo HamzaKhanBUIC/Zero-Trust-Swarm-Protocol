@@ -49,9 +49,11 @@ class SwarmAgent:
     """
     Python server that receives incoming tasks from the local Sidecar proxy.
     """
-    def __init__(self, host="127.0.0.1", port=5000):
+    def __init__(self, name: str = "agent", host="127.0.0.1", port=5000):
+        self.name = name
         self.host = host
         self.port = port
+        self.capabilities = {}
         self._handler_func = None
 
     def capability(self, func):
@@ -59,6 +61,7 @@ class SwarmAgent:
         Decorator to register the function that processes incoming tasks.
         (For simplicity in this 1.0 architecture, we handle a single primary capability function per server).
         """
+        self.capabilities[func.__name__] = func
         self._handler_func = func
         return func
 
