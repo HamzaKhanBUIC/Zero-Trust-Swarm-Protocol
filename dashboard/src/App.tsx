@@ -10,20 +10,8 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { Activity, ShieldCheck, Server, Cpu, Key } from 'lucide-react';
+import { SwarmAPI, type SwarmEvent } from './api';
 
-interface SwarmEvent {
-  time: string;
-  type: string;
-  agent_id: string;
-  message: string;
-}
-
-interface AgentRecord {
-  agent_id: string;
-  address: string;
-  capabilities: string[];
-  last_seen: string;
-}
 
 const initialNodes: Node[] = [
   {
@@ -53,10 +41,7 @@ function App() {
   useEffect(() => {
     const fetchNodes = async () => {
       try {
-        const res = await fetch('/api/agents');
-        if (!res.ok) return;
-        const data = await res.json();
-        const agents: AgentRecord[] = data.agents || [];
+        const agents = await SwarmAPI.fetchAgents();
         setAgentCount(agents.length);
         
         const newNodes: Node[] = [...initialNodes];
@@ -114,15 +99,9 @@ function App() {
 
   // Connect to SSE for live event stream
   useEffect(() => {
-    const sse = new EventSource('/api/events');
-    sse.onmessage = (e) => {
-      try {
-        const ev: SwarmEvent = JSON.parse(e.data);
-        setEvents(prev => [ev, ...prev].slice(0, 50)); // Keep last 50 events
-      } catch(err) {
-        console.error("Failed to parse SSE", err);
-      }
-    };
+    const sse = SwarmAPI.subscribeToEvents((ev) => {
+      setEvents(prev => [ev, ...prev].slice(0, 50)); // Keep last 50 events
+    });
     return () => sse.close();
   }, []);
 

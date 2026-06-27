@@ -63,12 +63,7 @@ func (r *SwarmRegistry) Register(agentID, addr string, caps []string) {
 	}
 }
 
-// Deregister removes an agent from the registry.
-func (r *SwarmRegistry) Deregister(agentID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.agents, agentID)
-}
+
 
 // Query retrieves active agents matching a specific capability.
 // If query is empty, returns all active agents.

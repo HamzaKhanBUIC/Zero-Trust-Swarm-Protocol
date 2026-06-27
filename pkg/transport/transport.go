@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"time"
 )
 
@@ -22,60 +21,7 @@ type SwarmTLS struct {
 	CACertPool *x509.CertPool
 }
 
-// NewSwarmTLS creates a new mTLS configuration from certificate files on disk.
-// certsDir should contain: ca.crt, <agentID>.crt, <agentID>.key
-func NewSwarmTLS(agentID, certsDir string) (*SwarmTLS, error) {
-	// Load CA certificate
-	caCertPEM, err := os.ReadFile(fmt.Sprintf("%s/ca.crt", certsDir))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read CA cert: %w", err)
-	}
-	caCertPool := x509.NewCertPool()
-	if !caCertPool.AppendCertsFromPEM(caCertPEM) {
-		return nil, fmt.Errorf("failed to parse CA cert")
-	}
 
-	// Load agent certificate and key
-	certFile := fmt.Sprintf("%s/%s.crt", certsDir, agentID)
-	keyFile := fmt.Sprintf("%s/%s.key", certsDir, agentID)
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load agent keypair: %w", err)
-	}
-
-	// Configure TLS with custom zero-trust validation
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		ClientCAs:    caCertPool,
-		RootCAs:      caCertPool,
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		MinVersion:   tls.VersionTLS13,
-		// We use InsecureSkipVerify = true to bypass default hostname validation (e.g. 127.0.0.1 vs agent-alpha),
-		// but we perform absolute cryptographic verification in VerifyConnection to maintain full zero-trust security.
-		InsecureSkipVerify: true,
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return fmt.Errorf("no peer certificates presented")
-			}
-			peerCert := cs.PeerCertificates[0]
-			opts := x509.VerifyOptions{
-				Roots:         caCertPool,
-				Intermediates: x509.NewCertPool(),
-				KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-			}
-			if _, err := peerCert.Verify(opts); err != nil {
-				return fmt.Errorf("certificate verification failed: %w", err)
-			}
-			return nil
-		},
-	}
-
-	return &SwarmTLS{
-		AgentID:    agentID,
-		TLSConfig:  tlsConfig,
-		CACertPool: caCertPool,
-	}, nil
-}
 
 // swarmListener wraps a standard net.Listener to perform protocol prefix negotiation
 // and wrap incoming connections in TLS.
