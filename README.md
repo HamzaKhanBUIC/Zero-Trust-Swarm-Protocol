@@ -17,10 +17,11 @@ The **Zero-Trust Swarm Protocol** is a secure, decentralized architecture for au
 
 ## 🚀 Features
 
-1. **Swarm Visualizer Dashboard**: A React Flow based UI to monitor active agents, capabilities, and network events over Server-Sent Events (SSE).
-2. **Persistent Task Queues**: Store-and-Forward background task queues powered by a pure-Go SQLite driver.
-3. **Python SDK**: Native `swarm-mtls` Python SDK to synchronously or asynchronously communicate with the Go Swarm Registry.
-4. **Expanded Sidecar API**: Local API to interface LLMs into the secure Swarm.
+1. **Native Local LLM Integration**: The SDK includes an `OllamaAgent` that automatically routes securely encrypted prompts to a local Ollama daemon, ensuring data never leaves the host.
+2. **Swarm Visualizer Dashboard**: A React Flow based UI to monitor active agents, capabilities, and network events over Server-Sent Events (SSE).
+3. **Persistent Task Queues**: Store-and-Forward background task queues powered by a pure-Go SQLite driver.
+4. **Python SDK**: Native `swarm-mtls` Python SDK to synchronously or asynchronously communicate with the Go Swarm Registry.
+5. **Expanded Sidecar API**: Local API to interface LLMs into the secure Swarm.
 
 ---
 

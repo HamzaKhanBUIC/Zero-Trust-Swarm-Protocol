@@ -102,3 +102,35 @@ class SwarmAgent:
         httpd = HTTPServer(server_address, WebhookHandler)
         print(f"🐍 Python SwarmAgent HTTP listener running on http://{self.host}:{self.port}")
         httpd.serve_forever()
+
+
+class OllamaAgent(SwarmAgent):
+    """
+    Python server that extends SwarmAgent to natively process incoming tasks using a local Ollama LLM.
+    """
+    def __init__(self, name: str = "ollama-agent", host="127.0.0.1", port=5000, model_name: str = "phi3"):
+        super().__init__(name=name, host=host, port=port)
+        self.model_name = model_name
+        
+        @self.capability
+        def process_with_ollama(payload: str) -> str:
+            print(f"[{self.name}] 🧠 Thinking via Ollama ({self.model_name})...")
+            try:
+                # We use the local Ollama daemon's REST API natively
+                response = requests.post(
+                    "http://127.0.0.1:11434/api/generate",
+                    json={
+                        "model": self.model_name,
+                        "prompt": payload,
+                        "stream": False
+                    },
+                    timeout=120
+                )
+                response.raise_for_status()
+                result = response.json().get("response", "Error: No response generated.")
+                print(f"[{self.name}] 💡 Generated response length: {len(result)} chars")
+                return result
+            except requests.exceptions.ConnectionError:
+                return "Ollama Error: Could not connect to local Ollama daemon on port 11434. Is it running?"
+            except Exception as e:
+                return f"Ollama Generation Error: {e}"
