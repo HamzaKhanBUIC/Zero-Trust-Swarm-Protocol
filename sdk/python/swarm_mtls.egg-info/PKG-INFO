@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: swarm-mtls
+Version: 1.0.0
+Summary: Python SDK for the Zero-Trust Swarm Protocol
+Author: Hamza Imran
+Requires-Python: >=3.8
+Requires-Dist: requests>=2.25.1
+Requires-Dist: openai>=1.0.0
+Dynamic: author
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary

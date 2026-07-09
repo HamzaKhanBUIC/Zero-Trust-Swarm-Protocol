@@ -1,0 +1,8 @@
+setup.py
+swarm_mtls/__init__.py
+swarm_mtls/client.py
+swarm_mtls.egg-info/PKG-INFO
+swarm_mtls.egg-info/SOURCES.txt
+swarm_mtls.egg-info/dependency_links.txt
+swarm_mtls.egg-info/requires.txt
+swarm_mtls.egg-info/top_level.txt
