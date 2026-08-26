@@ -1,60 +1,141 @@
-<div align="center">
-  <h1>⚡ Zero-Trust Swarm Protocol</h1>
-  <p><strong>Secure, Scalable mTLS Inter-Agent Communication Network</strong></p>
-  <p>
-    <img src="https://img.shields.io/badge/Go-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go" />
-    <img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
-    <img src="https://img.shields.io/badge/Docker-2CA5E0?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
-    <img src="https://img.shields.io/badge/Security-mTLS_1.3-success?style=for-the-badge" alt="mTLS 1.3" />
-  </p>
-</div>
+# Zero-Trust Swarm Protocol (ZTSP)
+
+> Cryptographically verifiable, mutual-TLS (mTLS 1.3) inter-agent communication layer with SPIFFE workload attestation and OpenTelemetry distributed tracing.
+
+[![Go Version](https://img.shields.io/badge/Go-1.22%2B-00ADD8.svg?logo=go)](https://go.dev/)
+[![Protocol: mTLS 1.3](https://img.shields.io/badge/Security-mTLS_1.3-success.svg)](https://en.wikipedia.org/wiki/Mutual_authentication)
+[![Identity: SPIFFE](https://img.shields.io/badge/Identity-SPIFFE-007ACC.svg)](https://spiffe.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ---
 
-## 📖 Overview
+## Overview
 
-The **Zero-Trust Swarm Protocol** is a secure, decentralized architecture for autonomous AI agents to communicate via enforced mTLS 1.3. 
+In modern multi-agent systems, agents frequently communicate across open HTTP/REST endpoints or unencrypted message brokers. This architecture is vulnerable to:
+1. **Unauthenticated Agent Spoofing**: Rogue agents injecting fraudulent actions into swarm workflows.
+2. **Man-In-The-Middle (MITM) Interception**: Cleartext eavesdropping on confidential reasoning chains and API tokens.
+3. **Privilege Escalation**: Compromised agents querying higher-privileged nodes without cryptographic attestation.
 
-## 🚀 Features
-
-1. **Native Local LLM Integration**: The SDK includes an `OllamaAgent` that automatically routes securely encrypted prompts to a local Ollama daemon, ensuring data never leaves the host.
-2. **Swarm Visualizer Dashboard**: A React Flow based UI to monitor active agents, capabilities, and network events over Server-Sent Events (SSE).
-3. **Persistent Task Queues**: Store-and-Forward background task queues powered by a pure-Go SQLite driver.
-4. **Python SDK**: Native `swarm-mtls` Python SDK to synchronously or asynchronously communicate with the Go Swarm Registry.
-5. **Expanded Sidecar API**: Local API to interface LLMs into the secure Swarm.
+**Zero-Trust Swarm Protocol (ZTSP)** eliminates implicit network trust between autonomous agents. Every agent process is bound to a cryptographically validated **SPIFFE ID** and must authenticate all inbound and outbound transactions via short-lived X.509 certificates over TLS 1.3.
 
 ---
 
-## 🛠️ Tech Stack
+## Protocol Architecture
 
-- **Backend**: Go (Golang)
-- **Database**: SQLite (`glebarez/go-sqlite`)
-- **Frontend Dashboard**: React, Vite, React Flow
-- **SDK**: Python
-- **Containerization**: Docker Compose
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Agent Initiator (SPIFFE ID)
+    participant CA as Local Trust Authority (CA)
+    participant B as Agent Receiver (SPIFFE ID)
+    participant OTel as OpenTelemetry Collector
+
+    A->>CA: Request Ephemeral X.509 SVID (ECDSA P-256)
+    CA-->>A: Return Signed Certificate (1-Hour TTL)
+    A->>B: TCP Connection + TLS 1.3 ClientHello (ALPN: ztsp/v1)
+    B-->>A: ServerHello + Server Certificate (SPIFFE Validation)
+    A-->>B: Client Certificate + CertificateVerify
+    Note over A,B: Mutual Authentication Verified (TLS_AES_256_GCM_SHA384)
+    A->>B: Encrypted Payload + Injected W3C Trace Context Header
+    B->>OTel: Export Attestation Event & Span Metrics
+    B-->>A: Signed Acknowledgment Digest
+```
 
 ---
 
-## 💻 Usage
+## Core Capabilities
 
-To launch the automation engine, simply run:
+- **Strict mTLS 1.3 Handshakes**: Ciphers are restricted to `TLS_AES_256_GCM_SHA384` and `TLS_CHACHA20_POLY1305_SHA256` with forward secrecy (ECDHE).
+- **SPIFFE Workload Attestation**: Enforces structured trust domains (`spiffe://swarm.local/agent/<agent-name>`) embedded in X.509 Subject Alternative Names (SANs).
+- **Distributed Observability**: Integrates OpenTelemetry W3C Trace Context directly into packet envelopes to track multi-agent execution traces.
+- **Python Client SDK (`sdk/python/`)**: Python bindings enabling LangGraph and AutoGen agents to establish mTLS channels with Go daemons.
 
+---
+
+## Repository Structure
+
+```
+.
+├── cmd/
+│   └── ztsp-daemon/          # Go core daemon entrypoint
+├── pkg/
+│   ├── crypto/               # ECDSA key generation, CSR signing, certificate validation
+│   ├── transport/            # mTLS listener, connection pooling, ALPN negotiation
+│   └── telemetry/            # OpenTelemetry tracer configuration and span exporters
+├── sdk/
+│   └── python/               # Python client library for AI agent integration
+├── examples/                 # Multi-node agent communication demo
+├── docker-compose.yml        # Multi-agent trust domain local testbed
+├── go.mod                    # Go module dependencies
+└── run-demo.ps1              # Local demonstration orchestration script
+```
+
+---
+
+## Getting Started
+
+### Prerequisites
+- Go 1.22 or higher
+- Docker & Docker Compose (for multi-container demo)
+- OpenSSL (optional, for manual certificate inspection)
+
+### Local Build & Execution
 ```bash
+# Clone the repository
+git clone https://github.com/HamzaKhanBUIC/Zero-Trust-Swarm-Protocol.git
+cd Zero-Trust-Swarm-Protocol
+
+# Download Go dependencies
+go mod download
+
+# Run unit and race tests
+go test -v -race ./...
+
+# Build the ZTSP daemon binary
+go build -o bin/ztsp-daemon ./cmd/ztsp-daemon
+```
+
+### Running the Multi-Node Container Testbed
+```bash
+# Launch the simulated multi-agent trust domain
 docker-compose up --build
 ```
 
-Then visit `http://127.0.0.1:3000` to view the Dashboard.
+---
+
+## Configuration
+
+The ZTSP daemon is configured via YAML or environment variables:
+
+```yaml
+trust_domain: "swarm.local"
+listen_address: ":8443"
+tls:
+  min_version: "VersionTLS13"
+  client_auth: "RequireAndVerifyClientCert"
+  cert_ttl_hours: 1
+telemetry:
+  enabled: true
+  otel_endpoint: "localhost:4317"
+```
 
 ---
 
-## ⚠️ Troubleshooting
+## Security Model & Threat Boundaries
 
-**Windows Users (Screen Stuttering during `docker-compose up --build`):**
-If you experience your mouse or screen stuttering while compiling the Go microservices on Windows, don't worry—your hardware is safe! This is a known issue where Docker Desktop's WSL2 backend (`vmmem`) temporarily consumes large amounts of RAM during heavy compilation tasks. 
+1. **Short-Lived Credentials**: Certificates are generated with 1-hour expiration times. If an agent node is compromised, the exposed credential window is bounded.
+2. **In-Memory Keys**: Private keys are generated in RAM using ECDSA curve P-256 and are never persisted to disk in unencrypted format.
+3. **Strict SAN Parsing**: Any connection presenting a certificate without a valid `spiffe://` SAN is immediately terminated at the TLS handshake level.
 
-**Fix:** Create a `.wslconfig` file in your Windows user directory (`C:\Users\YourName\.wslconfig`) with the following limits:
-```ini
-[wsl2]
-memory=4GB
-processors=2
+---
+
+## Limitations
+
+- **Certificate Authority Architecture**: The current reference implementation includes a built-in lightweight CA service. For enterprise multi-cluster deployments, integration with HashiCorp Vault or SPIRE is recommended.
+
+---
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 ```
