@@ -4,12 +4,15 @@
 package transport
 
 import (
+	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
 	"time"
+
+	"github.com/hamza-imran/zero-trust-swarm/pkg/protocol"
 )
 
 const ProtocolPrefix = "SWARM-mTLS\n"
@@ -116,4 +119,18 @@ func ExtractPeerID(conn *tls.Conn) string {
 		return peer.Subject.CommonName
 	}
 	return "unknown"
+}
+
+// VerifyPeerSignature checks that msg was signed by the key behind the peer's
+// mTLS certificate. It fails closed: a missing certificate or a non-ECDSA key
+// is an error, never a skipped check.
+func VerifyPeerSignature(state tls.ConnectionState, msg *protocol.Message) error {
+	if len(state.PeerCertificates) == 0 {
+		return fmt.Errorf("no peer certificate to verify payload signature against")
+	}
+	peerPubKey, ok := state.PeerCertificates[0].PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		return fmt.Errorf("peer key is %T, want *ecdsa.PublicKey", state.PeerCertificates[0].PublicKey)
+	}
+	return msg.Verify(peerPubKey)
 }

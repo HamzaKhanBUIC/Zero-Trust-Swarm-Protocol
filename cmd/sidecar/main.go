@@ -209,14 +209,9 @@ func (s *Sidecar) handleIncomingSwarmConnection(conn net.Conn) {
 		return
 	}
 	
-	if len(tlsConn.ConnectionState().PeerCertificates) > 0 {
-		peerPubKey, ok := tlsConn.ConnectionState().PeerCertificates[0].PublicKey.(*ecdsa.PublicKey)
-		if ok {
-			if err := msg.Verify(peerPubKey); err != nil {
-				log.Printf("❌ [INTEGRITY FAILURE] Payload signature invalid from %s: %v", peerID, err)
-				return
-			}
-		}
+	if err := transport.VerifyPeerSignature(tlsConn.ConnectionState(), msg); err != nil {
+		log.Printf("❌ [INTEGRITY FAILURE] Payload signature invalid from %s: %v", peerID, err)
+		return
 	}
 
 	if !s.PolicyEngine.Evaluate(peerID, msg.Type) {

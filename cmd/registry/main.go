@@ -149,15 +149,10 @@ func handleRegistryClient(conn net.Conn, swarmTLS *transport.SwarmTLS, reg *regi
 		return
 	}
 
-	// Cryptographic Integrity Check
-	if len(tlsConn.ConnectionState().PeerCertificates) > 0 {
-		peerPubKey, ok := tlsConn.ConnectionState().PeerCertificates[0].PublicKey.(*ecdsa.PublicKey)
-		if ok {
-			if err := msg.Verify(peerPubKey); err != nil {
-				log.Printf("❌ [INTEGRITY FAILURE] Payload signature invalid from %s: %v", peerID, err)
-				return
-			}
-		}
+	// Cryptographic Integrity Check (fails closed)
+	if err := transport.VerifyPeerSignature(tlsConn.ConnectionState(), msg); err != nil {
+		log.Printf("❌ [INTEGRITY FAILURE] Payload signature invalid from %s: %v", peerID, err)
+		return
 	}
 
 	// Zero-Trust Policy Check
