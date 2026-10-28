@@ -1,148 +1,121 @@
 # Zero-Trust Swarm Protocol (ZTSP)
 
-> Cryptographically verifiable, mutual-TLS (mTLS 1.3) inter-agent communication layer with SPIFFE workload attestation and OpenTelemetry distributed tracing.
+> A Go prototype of mutual-TLS messaging between AI agents: each agent proves who it is with a short-lived ECDSA certificate that carries a SPIFFE-style ID, instead of being trusted for being on the network.
 
-[![Go Version](https://img.shields.io/badge/Go-1.22%2B-00ADD8.svg?logo=go)](https://go.dev/)
-[![Protocol: mTLS 1.3](https://img.shields.io/badge/Security-mTLS_1.3-success.svg)](https://en.wikipedia.org/wiki/Mutual_authentication)
-[![Identity: SPIFFE](https://img.shields.io/badge/Identity-SPIFFE-007ACC.svg)](https://spiffe.io/)
+**Status:** Prototype. The identity provider is a demo: it checks an allowlist and optional bootstrap tokens, not the real workload (see [Limitations](#limitations)).
+**Demo:** none hosted. Run `./run-demo.sh` or `run-demo.ps1` locally (see [Quickstart](#quickstart)). CI builds the code and runs `go test -race ./...` on pushes and PRs to `main`.
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ---
 
-## Overview
+## Why
 
-In modern multi-agent systems, agents frequently communicate across open HTTP/REST endpoints or unencrypted message brokers. This architecture is vulnerable to:
-1. **Unauthenticated Agent Spoofing**: Rogue agents injecting fraudulent actions into swarm workflows.
-2. **Man-In-The-Middle (MITM) Interception**: Cleartext eavesdropping on confidential reasoning chains and API tokens.
-3. **Privilege Escalation**: Compromised agents querying higher-privileged nodes without cryptographic attestation.
+Agents in a multi-agent system often call each other over plain HTTP or a shared broker, so any process on the network can pretend to be any agent. ZTSP puts every agent-to-agent connection behind mutual TLS 1.3. The certificate's URI SAN (`spiffe://swarm.local/agent/<id>`) is the agent's identity. The receiver checks it, and the sender checks that it reached the agent it meant to reach.
 
-**Zero-Trust Swarm Protocol (ZTSP)** eliminates implicit network trust between autonomous agents. Every agent process is bound to a cryptographically validated **SPIFFE ID** and must authenticate all inbound and outbound transactions via short-lived X.509 certificates over TLS 1.3.
-
----
-
-## Protocol Architecture
+## Architecture
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant A as Agent Initiator (SPIFFE ID)
-    participant CA as Local Trust Authority (CA)
-    participant B as Agent Receiver (SPIFFE ID)
-    participant OTel as OpenTelemetry Collector
+    participant A as Agent A
+    participant IdP as idp-daemon (demo CA)
+    participant R as Registry
+    participant B as Agent B
 
-    A->>CA: Request Ephemeral X.509 SVID (ECDSA P-256)
-    CA-->>A: Return Signed Certificate (1-Hour TTL)
-    A->>B: TCP Connection + TLS 1.3 ClientHello (ALPN: ztsp/v1)
-    B-->>A: ServerHello + Server Certificate (SPIFFE Validation)
-    A-->>B: Client Certificate + CertificateVerify
-    Note over A,B: Mutual Authentication Verified (TLS 1.3)
-    A->>B: Encrypted Payload + Injected W3C Trace Context Header
-    B->>OTel: Export Attestation Event & Span Metrics
-    B-->>A: Signed Acknowledgment Digest
+    A->>IdP: agent_id (+ IDP_TOKEN) over plain TCP, default 127.0.0.1:23790
+    IdP-->>A: ECDSA P-256 certificate (1 h) + private key + CA cert
+    A->>R: SWARM-mTLS prefix, then TLS 1.3 mutual auth, then register (id must match the cert's SPIFFE ID)
+    A->>R: query by capability
+    R-->>A: address of Agent B
+    A->>B: SWARM-mTLS prefix, then TLS 1.3 mutual auth (peer ID checked against the target)
+    A->>B: JSON message, payload signed with A's key
+    B-->>A: reply, payload signed with B's key
 ```
 
----
+| Component | Path | What it does |
+| :-- | :-- | :-- |
+| IdP | `cmd/idp-daemon`, `pkg/idp`, `pkg/pki` | Built-in CA. Issues 1-hour ECDSA P-256 certificates with a SPIFFE-style URI SAN to identities on its allowlist. |
+| Registry | `cmd/registry`, `pkg/registry` | Capability discovery over mTLS. Rejects a registration whose agent ID differs from the caller's certificate. Serves a dashboard on `127.0.0.1:3000`. |
+| Agent | `cmd/agent` | Example agent: registers, queries by capability, sends and answers tasks. |
+| Sidecar | `cmd/sidecar` | Gives a non-Go agent an OpenAI-compatible HTTP API (`/v1/chat/completions`, `/v1/tasks/async`) and does the mTLS for it. |
+| Transport | `pkg/transport` | TLS config, peer-ID extraction and checks, payload-signature verification. |
+| Policy | `pkg/policy` | Allow/deny by principal and message type. |
+| Telemetry | `pkg/telemetry` | OpenTelemetry tracer that prints spans to stdout. |
+| Python SDK | `sdk/python/swarm_mtls` | HTTP client for the local sidecar. The sidecar does the mTLS, not the SDK. |
+| CA init | `cmd/ca-init` | Writes a CA and agent certificates to disk (24-hour certificates). |
 
-## Core Capabilities
+## Key features
 
-- **Strict mTLS 1.3 Handshakes**: Every connection requires TLS 1.3 (`MinVersion: tls.VersionTLS13`) and a client certificate (`RequireAndVerifyClientCert`). Go's `crypto/tls` chooses the TLS 1.3 cipher suite itself — all TLS 1.3 suites are AEAD with ephemeral key exchange, so forward secrecy is built in — and does not let you configure that list.
-- **SPIFFE Workload Attestation**: Enforces structured trust domains (`spiffe://swarm.local/agent/<agent-name>`) embedded in X.509 Subject Alternative Names (SANs).
-- **Distributed Observability**: Integrates OpenTelemetry W3C Trace Context directly into packet envelopes to track multi-agent execution traces.
-- **Python Client SDK (`sdk/python/`)**: Python bindings enabling LangGraph and AutoGen agents to establish mTLS channels with Go daemons.
+- **TLS 1.3 only, client certificates required.** `MinVersion: tls.VersionTLS13` and `RequireAndVerifyClientCert` (`cmd/agent/main.go`, `cmd/registry/main.go`, `cmd/sidecar/main.go`). Go chooses the TLS 1.3 cipher suites itself; they are not configurable.
+- **SPIFFE-style identity.** `spiffe://swarm.local/agent/<id>` in the URI SAN (`pkg/pki/pki.go`). A certificate must carry exactly one such SAN; there is no Common Name fallback.
+- **Identity binding.** Dialers pass the expected peer ID and the connection fails on a mismatch. The registry only accepts a registration whose agent ID equals the caller's SPIFFE ID.
+- **Signed payloads.** Messages carry an ECDSA signature over `Payload` only. `From`, `To`, `Type` and the trace fields are not covered by it.
+- **Allowlisted issuance.** The IdP only issues IDs on its allowlist and can require a per-identity bootstrap token.
 
----
+## Quickstart
 
-## Repository Structure
+Prerequisites: Go 1.25 or newer (`go.mod` says `go 1.25.0`). Docker only for the container testbed.
 
-```
-.
-├── cmd/
-│   └── ztsp-daemon/          # Go core daemon entrypoint
-├── pkg/
-│   ├── crypto/               # ECDSA key generation, CSR signing, certificate validation
-│   ├── transport/            # mTLS listener, connection pooling, ALPN negotiation
-│   └── telemetry/            # OpenTelemetry tracer configuration and span exporters
-├── sdk/
-│   └── python/               # Python client library for AI agent integration
-├── examples/                 # Multi-node agent communication demo
-├── docker-compose.yml        # Multi-agent trust domain local testbed
-├── go.mod                    # Go module dependencies
-└── run-demo.ps1              # Local demonstration orchestration script
-```
-
----
-
-## Getting Started
-
-### Prerequisites
-- Go 1.22 or higher
-- Docker & Docker Compose (for multi-container demo)
-- OpenSSL (optional, for manual certificate inspection)
-
-### Local Build & Execution
 ```bash
-# Clone the repository
 git clone https://github.com/HamzaKhanBUIC/Zero-Trust-Swarm-Protocol.git
 cd Zero-Trust-Swarm-Protocol
-
-# Download Go dependencies
-go mod download
-
-# Run unit and race tests
-go test -v -race ./...
-
-# Build the ZTSP daemon binary
-go build -o bin/ztsp-daemon ./cmd/ztsp-daemon
+go build ./cmd/...        # idp-daemon, registry, agent, sidecar, ca-init
+./run-demo.sh             # PowerShell: ./run-demo.ps1
 ```
 
-### Identity Provider allowlist
-The IdP only issues certificates for identities on its allowlist (`--allowlist` or `IDP_ALLOWLIST`), for example `swarm-registry,agent-alpha,agent-beta`. An entry can be bound to a bootstrap token (`agent-alpha=<token>`, at least 16 characters); that workload must then send it in `IDP_TOKEN`. The IdP listens on `127.0.0.1` by default and refuses any other address unless every entry has a token. `run-demo.sh` and `run-demo.ps1` pass the demo allowlist for you.
+The demo starts the IdP, the registry and two agents on `127.0.0.1`; `agent-beta` finds `math-solver` by capability, sends it a task and prints the signed reply.
 
-### Running the Multi-Node Container Testbed
+Container testbed (IdP, registry, one agent and the sidecar on a bridge network):
+
 ```bash
-# Each container needs its own IdP bootstrap token
-cp .env.example .env   # then fill in the three tokens
-
-# Launch the simulated multi-agent trust domain
+cp .env.example .env      # fill in the three bootstrap tokens
 docker-compose up --build
 ```
 
----
-
 ## Configuration
 
-The ZTSP daemon is configured via YAML or environment variables:
+There is no YAML or config file. Settings are command-line flags plus two environment variables.
 
-```yaml
-trust_domain: "swarm.local"
-listen_address: ":8443"
-tls:
-  min_version: "VersionTLS13"
-  client_auth: "RequireAndVerifyClientCert"
-  cert_ttl_hours: 1
-telemetry:
-  enabled: true
-  otel_endpoint: "localhost:4317"
+| Setting | Where | Default | Description |
+| :-- | :-- | :-- | :-- |
+| `IDP_ALLOWLIST` / `--allowlist` | idp-daemon | empty (issues nothing) | Comma-separated identities, each `name` or `name=token`. A token must be at least 16 characters. |
+| `--listen` | idp-daemon | `127.0.0.1:23790` | A non-loopback address is refused unless every allowlist entry has a token. |
+| `IDP_HOST` | agent, registry, sidecar | `127.0.0.1:23790` | Where to request a certificate. |
+| `IDP_TOKEN` | agent, registry, sidecar | empty | Bootstrap token for this workload's allowlist entry. |
+| `--id` | agent, sidecar | agent: none; sidecar: `agent-sidecar` | Identity to request from the IdP. |
+| `--listen` | agent, registry, sidecar | registry `127.0.0.1:9000`, sidecar `127.0.0.1:8080` | Listen address. |
+| `--registry` | agent, sidecar | `127.0.0.1:9000` | Registry address. |
+| `--caps` | agent, sidecar | empty | Capabilities to register. |
+| `--target-cap`, `--task` | agent | empty | Look up an agent with this capability and send it the task. |
+| `--listen-mtls`, `--upstream` | sidecar | empty, `http://127.0.0.1:5000/webhook` | mTLS listen address, and the local HTTP URL of the Python agent that receives tasks. |
+| `REGISTRY_IDP_TOKEN`, `ALPHA_IDP_TOKEN`, `SIDECAR_IDP_TOKEN` | `.env` for docker-compose | none (required) | Per-workload bootstrap tokens. |
+
+## Testing
+
+```bash
+go test ./...             # CI runs: go test -v -race ./...  (-race needs cgo)
 ```
 
----
+Go tests live in `cmd/registry`, `pkg/idp`, `pkg/policy`, `pkg/protocol` and `pkg/transport`; other packages have none. `tests/test_python_sdk.py` covers the Python SDK.
 
-## Security Model & Threat Boundaries
+## Architectural decisions and trade-offs
 
-1. **Short-Lived Credentials**: Certificates are generated with 1-hour expiration times. If an agent node is compromised, the exposed credential window is bounded.
-2. **In-Memory Keys**: Private keys are generated in RAM using ECDSA curve P-256 and are never persisted to disk in unencrypted format.
-3. **Strict SAN Parsing**: Any connection presenting a certificate without a valid `spiffe://` SAN is immediately terminated at the TLS handshake level.
-
----
+- **Built-in CA instead of SPIRE or Vault.** It keeps the demo to a few binaries. It is also why issuance is weak (see below).
+- **Custom framing instead of ALPN.** Each connection starts with a plain `SWARM-mTLS\n` prefix (`pkg/transport/transport.go`), then TLS. There is no ALPN and no connection pooling: `Dial` opens a new connection per message.
+- **Trace IDs in the message envelope.** `TraceID` and `SpanID` are JSON fields. They are not W3C Trace Context headers, and spans go to stdout only.
 
 ## Limitations
 
-- **Certificate Authority Architecture**: The current reference implementation includes a built-in lightweight CA service. For enterprise multi-cluster deployments, integration with HashiCorp Vault or SPIRE is recommended.
-- **No OS-level workload attestation**: The IdP checks an allowlist and optional bootstrap tokens. An allowlist entry without a token can be requested by any process on the same host.
-
----
+- **The IdP does not attest workloads.** It issues a certificate and private key to any caller that can reach its port and name an allowlisted ID. An entry without a bootstrap token can be requested by any process on the same host.
+- **The IdP channel is plain TCP.** The issued private key crosses it unencrypted. On the docker-compose bridge network, other containers could read it.
+- **The CA is regenerated on every IdP start** and its key is written to `.certs/ca.key` (mode 0600, unencrypted). Keys issued by `cmd/ca-init` are also written to disk.
+- **Signatures cover the payload only**, not the envelope fields.
+- **The sidecar HTTP API has no authentication.** Compose binds it to `127.0.0.1` only.
+- **Telemetry is stdout only.** There is no OpenTelemetry Collector export.
+- **Not verified here:** the docker-compose testbed and the demo scripts were not run for this README.
+- **Unrelated files in the repo.** `src/`, `main.py`, `uv-install.ps1`, `examples/StressTestProject/` and the `tests/test_*.py` files other than `test_python_sdk.py` belong to a different Python project (a docs scraper and vector store). They are not part of the protocol and are not used by it.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-```
+MIT. See [LICENSE](LICENSE).
