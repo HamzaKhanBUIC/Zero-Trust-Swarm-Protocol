@@ -12,7 +12,7 @@ go mod tidy
 
 # Start IdP Daemon
 echo -e "\033[1;32m🚀 Starting IdP Daemon (Workload Identity) in background...\033[0m"
-go run ./cmd/idp-daemon &
+go run ./cmd/idp-daemon --allowlist swarm-registry,agent-alpha,agent-beta &
 IDP_PID=$!
 sleep 3
 

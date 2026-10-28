@@ -7,6 +7,9 @@ import (
 	"time"
 )
 
+// ServiceID is the agent ID the registry authenticates as.
+const ServiceID = "swarm-registry"
+
 // AgentRecord holds registration details for a single agent.
 type AgentRecord struct {
 	AgentID      string    `json:"agent_id"`
@@ -62,8 +65,6 @@ func (r *SwarmRegistry) Register(agentID, addr string, caps []string) {
 		LastSeen:     time.Now(),
 	}
 }
-
-
 
 // Query retrieves active agents matching a specific capability.
 // If query is empty, returns all active agents.

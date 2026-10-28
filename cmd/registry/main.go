@@ -35,7 +35,7 @@ func main() {
 
 	// 1. Fetch registry's own credential dynamically from the local Workload Identity API
 	fmt.Println("🔑 Bootstrapping registry credential from IdP...")
-	resp, err := idp.FetchIdentity("swarm-registry")
+	resp, err := idp.FetchIdentity(registry.ServiceID)
 	if err != nil {
 		log.Fatalf("Bootstrapping failed: %v", err)
 	}
@@ -61,30 +61,8 @@ func main() {
 	}
 
 	swarmTLS := &transport.SwarmTLS{
-		AgentID: "swarm-registry",
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			ClientCAs:    caPool,
-			RootCAs:      caPool,
-			ClientAuth:   tls.RequireAndVerifyClientCert,
-			MinVersion:   tls.VersionTLS13,
-			InsecureSkipVerify: true,
-			VerifyConnection: func(cs tls.ConnectionState) error {
-				if len(cs.PeerCertificates) == 0 {
-					return fmt.Errorf("no peer certificates presented")
-				}
-				peerCert := cs.PeerCertificates[0]
-				opts := x509.VerifyOptions{
-					Roots:         caPool,
-					Intermediates: x509.NewCertPool(),
-					KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-				}
-				if _, err := peerCert.Verify(opts); err != nil {
-					return fmt.Errorf("certificate verification failed: %w", err)
-				}
-				return nil
-			},
-		},
+		AgentID:    registry.ServiceID,
+		TLSConfig:  transport.NewTLSConfig(cert, caPool),
 		CACertPool: caPool,
 	}
 
@@ -100,7 +78,7 @@ func main() {
 
 	// 3. Start Swarm Registry service
 	reg := registry.NewSwarmRegistry()
-	
+
 	// Start Dashboard UI Server
 	dashServer := registry.NewServer(reg)
 	go dashServer.Start("127.0.0.1:3000")
@@ -167,10 +145,15 @@ func handleRegistryClient(conn net.Conn, swarmTLS *transport.SwarmTLS, reg *regi
 
 	switch msg.Type {
 	case protocol.TypeRegister:
-		// Message payload contains Capability/Address config
-		var rec registry.AgentRecord
-		if err := json.Unmarshal([]byte(msg.Payload), &rec); err != nil {
-			log.Printf("❌ Failed to parse registration from %s: %v", peerID, err)
+		// Message payload contains Capability/Address config for the caller itself
+		rec, err := boundRecord(tlsConn.ConnectionState(), msg.Payload)
+		if err != nil {
+			log.Printf("⛔ [REGISTRATION DENIED] from %s: %v", peerID, err)
+			dashServer.BroadcastEvent("deny", peerID, fmt.Sprintf("Registration denied: %v", err))
+			reply := protocol.NewMessage(protocol.TypeResult, registry.ServiceID, peerID, "⛔ REGISTRATION DENIED: identity mismatch")
+			if err := reply.Sign(privKey); err == nil {
+				_ = protocol.WriteMessage(conn, reply)
+			}
 			return
 		}
 		reg.Register(rec.AgentID, rec.Address, rec.Capabilities)
@@ -185,7 +168,7 @@ func handleRegistryClient(conn net.Conn, swarmTLS *transport.SwarmTLS, reg *regi
 		// Message payload contains requested capability (if any)
 		reqCap := msg.Payload
 		records := reg.Query(reqCap)
-		
+
 		dashServer.BroadcastEvent("query", peerID, fmt.Sprintf("Queried capability: %s", reqCap))
 
 		respBytes, _ := json.Marshal(registry.QueryResponse{Agents: records})
@@ -194,4 +177,18 @@ func handleRegistryClient(conn net.Conn, swarmTLS *transport.SwarmTLS, reg *regi
 		_ = protocol.WriteMessage(conn, reply)
 		log.Printf("🔍 Queried for capability %q -> returned %d records to %s", reqCap, len(records), peerID)
 	}
+}
+
+// boundRecord parses a registration and rejects it unless it is for the
+// agent whose certificate authenticated the connection. The agent ID in the
+// payload is never trusted on its own.
+func boundRecord(state tls.ConnectionState, payload string) (registry.AgentRecord, error) {
+	var rec registry.AgentRecord
+	if err := json.Unmarshal([]byte(payload), &rec); err != nil {
+		return rec, fmt.Errorf("parse registration: %w", err)
+	}
+	if err := transport.VerifyPeerID(state, rec.AgentID); err != nil {
+		return rec, fmt.Errorf("registration for %q: %w", rec.AgentID, err)
+	}
+	return rec, nil
 }
