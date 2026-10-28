@@ -30,6 +30,11 @@ agentguidelines.md
 dashboard/node_modules/
 sidecar_queue.db
 
+# Local secrets (IdP bootstrap tokens)
+.env
+.env.*
+!.env.example
+
 # Python build artifacts
 __pycache__/
 *.pyc

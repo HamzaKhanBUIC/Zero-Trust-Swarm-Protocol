@@ -3,6 +3,9 @@ services:
     build: .
     container_name: swarm-idp
     command: ["./idp-daemon", "--listen", "0.0.0.0:23790"]
+    environment:
+      # Off loopback, every identity needs its own bootstrap token (see .env.example).
+      - IDP_ALLOWLIST=swarm-registry=${REGISTRY_IDP_TOKEN:?set in .env},agent-alpha=${ALPHA_IDP_TOKEN:?set in .env},agent-sidecar=${SIDECAR_IDP_TOKEN:?set in .env}
     networks:
       - swarm-net
 
@@ -12,6 +15,7 @@ services:
     command: ["./registry", "--listen", "0.0.0.0:9000"]
     environment:
       - IDP_HOST=swarm-idp:23790
+      - IDP_TOKEN=${REGISTRY_IDP_TOKEN:?set in .env}
     depends_on:
       - idp-daemon
     networks:
@@ -23,6 +27,7 @@ services:
     command: ["./agent", "--id", "agent-alpha", "--listen", "0.0.0.0:9101", "--caps", "math-solver", "--registry", "swarm-registry:9000"]
     environment:
       - IDP_HOST=swarm-idp:23790
+      - IDP_TOKEN=${ALPHA_IDP_TOKEN:?set in .env}
     depends_on:
       - registry
     networks:
@@ -34,6 +39,7 @@ services:
     command: ["./sidecar", "--id", "agent-sidecar", "--listen", "0.0.0.0:8080", "--listen-mtls", "0.0.0.0:9102", "--caps", "data-analyzer", "--upstream", "http://host.docker.internal:5000/", "--registry", "swarm-registry:9000"]
     environment:
       - IDP_HOST=swarm-idp:23790
+      - IDP_TOKEN=${SIDECAR_IDP_TOKEN:?set in .env}
     ports:
       - "8080:8080" # Exposed to the host so Python scripts can hit it!
     depends_on:

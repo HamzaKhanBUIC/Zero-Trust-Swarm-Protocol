@@ -1,10 +1,11 @@
-// Command idp-daemon runs the secure central Identity Provider (IdP) daemon.
-// It serves temporary, in-memory workload certificates to agents over local loopback IPC,
-// implementing a true zero-trust workload attestation & certificate rotation flow.
+// Command idp-daemon runs the central Identity Provider (IdP) daemon.
+// It serves short-lived, in-memory workload certificates to agents, but only
+// for identities on its allowlist. An allowlist entry can require a
+// per-workload bootstrap token. It listens on loopback by default and refuses
+// to listen elsewhere unless every identity requires a token.
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -21,20 +22,30 @@ const certsDir = ".certs"
 
 func main() {
 	listenAddr := flag.String("listen", fmt.Sprintf("127.0.0.1:%d", idp.WorkloadAPIPort), "Address to listen on")
+	allowFlag := flag.String("allowlist", os.Getenv("IDP_ALLOWLIST"),
+		`Comma-separated identities this IdP may issue, each "name" or "name=token" (default $IDP_ALLOWLIST; put tokens in the env var, not on the command line)`)
 	flag.Parse()
+
+	allow, err := idp.ParseAllowlist(*allowFlag)
+	if err != nil {
+		log.Fatalf("Invalid identity allowlist (set --allowlist or IDP_ALLOWLIST): %v", err)
+	}
+	if !idp.IsLoopback(*listenAddr) && !allow.RequiresTokens() {
+		log.Fatalf("Refusing to listen on non-loopback address %s: every allowlist entry needs a token (name=token)", *listenAddr)
+	}
 
 	fmt.Println("╔══════════════════════════════════════════════╗")
 	fmt.Println("║   Zero-Trust Swarm — Workload Identity Daemon║")
 	fmt.Println("╚══════════════════════════════════════════════╝")
 	fmt.Println()
 
-	// 1. Initialize or Load CA
+	// 1. Generate a fresh CA for this run
 	fmt.Println("🔐 Initializing Swarm CA...")
 	ca, err := pki.InitCA(certsDir)
 	if err != nil {
 		log.Fatalf("CA initialization failed: %v", err)
 	}
-	fmt.Println("  ✓ Swarm CA loaded successfully.")
+	fmt.Println("  ✓ Swarm CA ready.")
 
 	// 2. Start Local IPC Listener
 	ln, err := net.Listen("tcp", *listenAddr)
@@ -42,7 +53,7 @@ func main() {
 		log.Fatalf("Failed to bind to Workload IPC address %s: %v", *listenAddr, err)
 	}
 	defer ln.Close()
-	fmt.Printf("👂 Workload Identity API listening on %s (strict local-only loopback unless overridden)\n\n", *listenAddr)
+	fmt.Printf("👂 Workload Identity API listening on %s\n\n", *listenAddr)
 
 	// Graceful shutdown
 	go func() {
@@ -54,46 +65,8 @@ func main() {
 		os.Exit(0)
 	}()
 
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			break
-		}
-		go handleWorkloadIdentityRequest(conn, ca)
+	srv := &idp.Server{CA: ca, Allow: allow}
+	if err := srv.Serve(ln); err != nil {
+		log.Printf("Identity Daemon stopped: %v", err)
 	}
-}
-
-func handleWorkloadIdentityRequest(conn net.Conn, ca *pki.CertBundle) {
-	defer conn.Close()
-
-	// Read dynamic identity request
-	var req idp.IdentityRequest
-	if err := json.NewDecoder(conn).Decode(&req); err != nil {
-		log.Printf("❌ Failed to decode request: %v", err)
-		return
-	}
-
-	log.Printf("🔑 Received Identity Request for agent: %s", req.AgentID)
-
-	// Issue ephemeral (1-hour) workload credentials in-memory
-	certPEM, keyPEM, err := pki.IssueAgentCertInMemory(req.AgentID, ca)
-	if err != nil {
-		log.Printf("❌ Failed to issue cert for %s: %v", req.AgentID, err)
-		return
-	}
-
-	// Prepare Response
-	resp := idp.IdentityResponse{
-		CertPEM: string(certPEM),
-		KeyPEM:  string(keyPEM),
-		CAPEM:   string(ca.CertPEM),
-	}
-
-	// Return response
-	if err := json.NewEncoder(conn).Encode(resp); err != nil {
-		log.Printf("❌ Failed to encode response: %v", err)
-		return
-	}
-
-	log.Printf("✅ Dynamically issued short-lived credentials for %s (in-memory only)", req.AgentID)
 }

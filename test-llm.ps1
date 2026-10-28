@@ -6,7 +6,7 @@ go build -o agent.exe ./cmd/agent
 go build -o sidecar.exe ./cmd/sidecar
 
 # Start IdP
-Start-Process -NoNewWindow -FilePath ".\idp-daemon.exe"
+Start-Process -NoNewWindow -FilePath ".\idp-daemon.exe" -ArgumentList "--allowlist", "swarm-registry,agent-alpha,agent-sidecar"
 Start-Sleep -Seconds 3
 
 # Start Registry

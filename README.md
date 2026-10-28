@@ -95,8 +95,14 @@ go test -v -race ./...
 go build -o bin/ztsp-daemon ./cmd/ztsp-daemon
 ```
 
+### Identity Provider allowlist
+The IdP only issues certificates for identities on its allowlist (`--allowlist` or `IDP_ALLOWLIST`), for example `swarm-registry,agent-alpha,agent-beta`. An entry can be bound to a bootstrap token (`agent-alpha=<token>`, at least 16 characters); that workload must then send it in `IDP_TOKEN`. The IdP listens on `127.0.0.1` by default and refuses any other address unless every entry has a token. `run-demo.sh` and `run-demo.ps1` pass the demo allowlist for you.
+
 ### Running the Multi-Node Container Testbed
 ```bash
+# Each container needs its own IdP bootstrap token
+cp .env.example .env   # then fill in the three tokens
+
 # Launch the simulated multi-agent trust domain
 docker-compose up --build
 ```
@@ -132,6 +138,7 @@ telemetry:
 ## Limitations
 
 - **Certificate Authority Architecture**: The current reference implementation includes a built-in lightweight CA service. For enterprise multi-cluster deployments, integration with HashiCorp Vault or SPIRE is recommended.
+- **No OS-level workload attestation**: The IdP checks an allowlist and optional bootstrap tokens. An allowlist entry without a token can be requested by any process on the same host.
 
 ---
 

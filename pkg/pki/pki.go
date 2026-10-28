@@ -13,8 +13,33 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 )
+
+// TrustDomain is the SPIFFE trust domain of every swarm identity.
+const TrustDomain = "swarm.local"
+
+// agentIDPattern keeps agent IDs safe to embed as one SPIFFE path segment,
+// a DNS SAN and a file name: no '/', '?', '#', '%' or ':'.
+var agentIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
+
+// ValidAgentID reports whether id is a well-formed agent ID.
+func ValidAgentID(id string) bool {
+	return agentIDPattern.MatchString(id)
+}
+
+// SPIFFEID returns the SPIFFE ID of an agent: spiffe://swarm.local/agent/<agentID>.
+func SPIFFEID(agentID string) string {
+	return "spiffe://" + TrustDomain + "/agent/" + agentID
+}
+
+func agentURI(agentID string) (*url.URL, error) {
+	if !ValidAgentID(agentID) {
+		return nil, fmt.Errorf("invalid agent ID %q", agentID)
+	}
+	return url.Parse(SPIFFEID(agentID))
+}
 
 // CertBundle holds a certificate and its private key.
 type CertBundle struct {
@@ -78,12 +103,15 @@ func InitCA(certsDir string) (*CertBundle, error) {
 // IssueAgentCert creates a short-lived agent certificate signed by the CA.
 // Each agent gets a SPIFFE identity: spiffe://swarm.local/agent/<agentID>
 func IssueAgentCert(agentID, certsDir string, ca *CertBundle) error {
+	spiffeURI, err := agentURI(agentID)
+	if err != nil {
+		return err
+	}
+
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return fmt.Errorf("failed to generate agent key: %w", err)
 	}
-
-	spiffeURI, _ := url.Parse(fmt.Sprintf("spiffe://swarm.local/agent/%s", agentID))
 
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()),
@@ -121,12 +149,15 @@ func IssueAgentCert(agentID, certsDir string, ca *CertBundle) error {
 
 // IssueAgentCertInMemory generates a short-lived agent certificate and private key in-memory.
 func IssueAgentCertInMemory(agentID string, ca *CertBundle) (certPEM []byte, keyPEM []byte, err error) {
+	spiffeURI, err := agentURI(agentID)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to generate agent key: %w", err)
 	}
-
-	spiffeURI, _ := url.Parse(fmt.Sprintf("spiffe://swarm.local/agent/%s", agentID))
 
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()),
@@ -154,4 +185,3 @@ func IssueAgentCertInMemory(agentID string, ca *CertBundle) (certPEM []byte, key
 
 	return certPEM, keyPEM, nil
 }
-
