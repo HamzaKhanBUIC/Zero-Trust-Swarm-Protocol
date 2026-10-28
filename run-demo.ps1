@@ -21,7 +21,7 @@ go build -o agent.exe ./cmd/agent
 
 # Start IdP Daemon
 Write-Host "[START] Starting IdP Daemon (Workload Identity) in background..." -ForegroundColor Green
-Start-Process -NoNewWindow -FilePath ".\idp-daemon.exe"
+Start-Process -NoNewWindow -FilePath ".\idp-daemon.exe" -ArgumentList "--allowlist", "swarm-registry,agent-alpha,agent-beta"
 Start-Sleep -Seconds 3
 
 # Start Registry
