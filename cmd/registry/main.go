@@ -145,10 +145,15 @@ func handleRegistryClient(conn net.Conn, swarmTLS *transport.SwarmTLS, reg *regi
 
 	switch msg.Type {
 	case protocol.TypeRegister:
-		// Message payload contains Capability/Address config
-		var rec registry.AgentRecord
-		if err := json.Unmarshal([]byte(msg.Payload), &rec); err != nil {
-			log.Printf("❌ Failed to parse registration from %s: %v", peerID, err)
+		// Message payload contains Capability/Address config for the caller itself
+		rec, err := boundRecord(tlsConn.ConnectionState(), msg.Payload)
+		if err != nil {
+			log.Printf("⛔ [REGISTRATION DENIED] from %s: %v", peerID, err)
+			dashServer.BroadcastEvent("deny", peerID, fmt.Sprintf("Registration denied: %v", err))
+			reply := protocol.NewMessage(protocol.TypeResult, registry.ServiceID, peerID, "⛔ REGISTRATION DENIED: identity mismatch")
+			if err := reply.Sign(privKey); err == nil {
+				_ = protocol.WriteMessage(conn, reply)
+			}
 			return
 		}
 		reg.Register(rec.AgentID, rec.Address, rec.Capabilities)
@@ -172,4 +177,18 @@ func handleRegistryClient(conn net.Conn, swarmTLS *transport.SwarmTLS, reg *regi
 		_ = protocol.WriteMessage(conn, reply)
 		log.Printf("🔍 Queried for capability %q -> returned %d records to %s", reqCap, len(records), peerID)
 	}
+}
+
+// boundRecord parses a registration and rejects it unless it is for the
+// agent whose certificate authenticated the connection. The agent ID in the
+// payload is never trusted on its own.
+func boundRecord(state tls.ConnectionState, payload string) (registry.AgentRecord, error) {
+	var rec registry.AgentRecord
+	if err := json.Unmarshal([]byte(payload), &rec); err != nil {
+		return rec, fmt.Errorf("parse registration: %w", err)
+	}
+	if err := transport.VerifyPeerID(state, rec.AgentID); err != nil {
+		return rec, fmt.Errorf("registration for %q: %w", rec.AgentID, err)
+	}
+	return rec, nil
 }
