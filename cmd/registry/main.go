@@ -35,7 +35,7 @@ func main() {
 
 	// 1. Fetch registry's own credential dynamically from the local Workload Identity API
 	fmt.Println("🔑 Bootstrapping registry credential from IdP...")
-	resp, err := idp.FetchIdentity("swarm-registry")
+	resp, err := idp.FetchIdentity(registry.ServiceID)
 	if err != nil {
 		log.Fatalf("Bootstrapping failed: %v", err)
 	}
@@ -61,30 +61,8 @@ func main() {
 	}
 
 	swarmTLS := &transport.SwarmTLS{
-		AgentID: "swarm-registry",
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			ClientCAs:    caPool,
-			RootCAs:      caPool,
-			ClientAuth:   tls.RequireAndVerifyClientCert,
-			MinVersion:   tls.VersionTLS13,
-			InsecureSkipVerify: true,
-			VerifyConnection: func(cs tls.ConnectionState) error {
-				if len(cs.PeerCertificates) == 0 {
-					return fmt.Errorf("no peer certificates presented")
-				}
-				peerCert := cs.PeerCertificates[0]
-				opts := x509.VerifyOptions{
-					Roots:         caPool,
-					Intermediates: x509.NewCertPool(),
-					KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-				}
-				if _, err := peerCert.Verify(opts); err != nil {
-					return fmt.Errorf("certificate verification failed: %w", err)
-				}
-				return nil
-			},
-		},
+		AgentID:    registry.ServiceID,
+		TLSConfig:  transport.NewTLSConfig(cert, caPool),
 		CACertPool: caPool,
 	}
 
@@ -100,7 +78,7 @@ func main() {
 
 	// 3. Start Swarm Registry service
 	reg := registry.NewSwarmRegistry()
-	
+
 	// Start Dashboard UI Server
 	dashServer := registry.NewServer(reg)
 	go dashServer.Start("127.0.0.1:3000")
@@ -185,7 +163,7 @@ func handleRegistryClient(conn net.Conn, swarmTLS *transport.SwarmTLS, reg *regi
 		// Message payload contains requested capability (if any)
 		reqCap := msg.Payload
 		records := reg.Query(reqCap)
-		
+
 		dashServer.BroadcastEvent("query", peerID, fmt.Sprintf("Queried capability: %s", reqCap))
 
 		respBytes, _ := json.Marshal(registry.QueryResponse{Agents: records})

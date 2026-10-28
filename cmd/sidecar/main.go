@@ -98,30 +98,8 @@ func main() {
 	caPool.AppendCertsFromPEM([]byte(identity.CAPEM))
 
 	swarmTLS := &transport.SwarmTLS{
-		AgentID: *id,
-		TLSConfig: &tls.Config{
-			Certificates:       []tls.Certificate{cert},
-			ClientCAs:          caPool,
-			RootCAs:            caPool,
-			ClientAuth:         tls.RequireAndVerifyClientCert,
-			MinVersion:         tls.VersionTLS13,
-			InsecureSkipVerify: true,
-			VerifyConnection: func(cs tls.ConnectionState) error {
-				if len(cs.PeerCertificates) == 0 {
-					return fmt.Errorf("no peer certificates presented")
-				}
-				peerCert := cs.PeerCertificates[0]
-				opts := x509.VerifyOptions{
-					Roots:         caPool,
-					Intermediates: x509.NewCertPool(),
-					KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-				}
-				if _, err := peerCert.Verify(opts); err != nil {
-					return fmt.Errorf("certificate verification failed: %w", err)
-				}
-				return nil
-			},
-		},
+		AgentID:    *id,
+		TLSConfig:  transport.NewTLSConfig(cert, caPool),
 		CACertPool: caPool,
 	}
 
@@ -208,7 +186,7 @@ func (s *Sidecar) handleIncomingSwarmConnection(conn net.Conn) {
 		log.Printf("Read error: %v", err)
 		return
 	}
-	
+
 	if err := transport.VerifyPeerSignature(tlsConn.ConnectionState(), msg); err != nil {
 		log.Printf("❌ [INTEGRITY FAILURE] Payload signature invalid from %s: %v", peerID, err)
 		return
@@ -230,7 +208,7 @@ func (s *Sidecar) handleIncomingSwarmConnection(conn net.Conn) {
 			"sender":  msg.From,
 			"payload": msg.Payload,
 		})
-		
+
 		httpResp, err := http.Post(s.UpstreamURL, "application/json", bytes.NewBuffer(reqBody))
 		if err != nil {
 			log.Printf("⚠️ Failed to forward task to upstream %s: %v", s.UpstreamURL, err)
@@ -255,7 +233,7 @@ func (s *Sidecar) runHeartbeatLoop(listenAddr string, caps []string) {
 	defer ticker.Stop()
 
 	register := func() {
-		conn, err := s.SwarmTLS.Dial(s.RegistryAddr)
+		conn, err := s.SwarmTLS.Dial(s.RegistryAddr, registry.ServiceID)
 		if err != nil {
 			return
 		}
@@ -304,12 +282,12 @@ func (s *Sidecar) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	taskPayload := req.Messages[len(req.Messages)-1].Content
 
-	conn, err := s.SwarmTLS.Dial(s.RegistryAddr)
+	conn, err := s.SwarmTLS.Dial(s.RegistryAddr, registry.ServiceID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to connect to registry: %v", err), http.StatusInternalServerError)
 		return
 	}
-	
+
 	queryMsg := protocol.NewMessage(protocol.TypeQuery, s.AgentID, "swarm-registry", targetCapability)
 	queryMsg.Sign(s.PrivKey)
 	protocol.WriteMessage(conn, queryMsg)
@@ -331,7 +309,7 @@ func (s *Sidecar) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	target := qResp.Agents[0]
 
-	peerConn, err := s.SwarmTLS.Dial(target.Address)
+	peerConn, err := s.SwarmTLS.Dial(target.Address, target.AgentID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to connect to peer %s: %v", target.AgentID, err), http.StatusInternalServerError)
 		return
@@ -408,7 +386,7 @@ func (s *Sidecar) retryQueueLoop() {
 		}
 
 		for _, qm := range msgs {
-			conn, err := s.SwarmTLS.Dial(s.RegistryAddr)
+			conn, err := s.SwarmTLS.Dial(s.RegistryAddr, registry.ServiceID)
 			if err != nil {
 				continue
 			}
@@ -438,7 +416,7 @@ func (s *Sidecar) retryQueueLoop() {
 				continue
 			}
 
-			peerConn, err := s.SwarmTLS.Dial(targetAddr)
+			peerConn, err := s.SwarmTLS.Dial(targetAddr, qm.TargetID)
 			if err != nil {
 				continue
 			}
