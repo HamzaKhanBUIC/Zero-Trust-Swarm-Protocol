@@ -109,7 +109,14 @@ func (s *Server) Start(addr string) {
 	})
 
 	log.Printf("🌐 Swarm Visualizer Dashboard running at http://%s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		// No ReadTimeout/WriteTimeout: /api/events is a long-lived SSE stream.
+	}
+	if err := srv.ListenAndServe(); err != nil {
 		log.Printf("Dashboard server stopped: %v", err)
 	}
 }

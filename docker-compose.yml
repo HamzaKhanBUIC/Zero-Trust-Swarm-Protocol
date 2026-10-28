@@ -41,7 +41,7 @@ services:
       - IDP_HOST=swarm-idp:23790
       - IDP_TOKEN=${SIDECAR_IDP_TOKEN:?set in .env}
     ports:
-      - "8080:8080" # Exposed to the host so Python scripts can hit it!
+      - "127.0.0.1:8080:8080" # Host-only: the sidecar API has no auth and signs as agent-sidecar
     depends_on:
       - agent-alpha
     networks:

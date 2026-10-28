@@ -147,7 +147,14 @@ func main() {
 	http.HandleFunc("/v1/tasks/async", s.handleAsyncTask)
 
 	fmt.Printf("[2/2]👂 Sidecar Egress Proxy running on http://%s\n", *listen)
-	log.Fatal(http.ListenAndServe(*listen, nil))
+	srv := &http.Server{
+		Addr:              *listen,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		// No WriteTimeout: a chat completion waits for the remote agent's answer.
+	}
+	log.Fatal(srv.ListenAndServe())
 }
 
 func (s *Sidecar) runIngressListener(addr string) {
