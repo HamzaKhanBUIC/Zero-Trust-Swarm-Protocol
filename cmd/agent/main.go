@@ -193,6 +193,12 @@ func handleConnection(swarmTLS *transport.SwarmTLS, conn net.Conn, privKey *ecds
 		return
 	}
 
+	// Identity binding: the claimed sender must be the authenticated peer
+	if err := transport.VerifyPeerID(tlsConn.ConnectionState(), msg.From); err != nil {
+		log.Printf("⛔ [IDENTITY MISMATCH] %s sent a message claiming to be from %q: %v", peerID, msg.From, err)
+		return
+	}
+
 	fmt.Printf("\n📨 [mTLS RECEIVED] from %s: type=%s, payload=%q\n", peerID, msg.Type, msg.Payload)
 
 	// OpenTelemetry Extraction

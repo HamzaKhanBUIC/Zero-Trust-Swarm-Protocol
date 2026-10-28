@@ -192,6 +192,13 @@ func (s *Sidecar) handleIncomingSwarmConnection(conn net.Conn) {
 		return
 	}
 
+	// Identity binding: msg.From is forwarded upstream as the sender, so it
+	// must be the authenticated peer
+	if err := transport.VerifyPeerID(tlsConn.ConnectionState(), msg.From); err != nil {
+		log.Printf("⛔ [IDENTITY MISMATCH] %s sent a message claiming to be from %q: %v", peerID, msg.From, err)
+		return
+	}
+
 	if !s.PolicyEngine.Evaluate(peerID, msg.Type) {
 		log.Printf("⛔ [POLICY DENY] Action %s denied for principal %s", msg.Type, peerID)
 		reply := protocol.NewMessage(protocol.TypeResult, s.AgentID, msg.From, "⛔ POLICY DENY: Unauthorized")
