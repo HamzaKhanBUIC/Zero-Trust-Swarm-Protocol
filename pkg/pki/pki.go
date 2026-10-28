@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -29,9 +30,18 @@ func ValidAgentID(id string) bool {
 	return agentIDPattern.MatchString(id)
 }
 
+const agentIDPrefix = "spiffe://" + TrustDomain + "/agent/"
+
 // SPIFFEID returns the SPIFFE ID of an agent: spiffe://swarm.local/agent/<agentID>.
 func SPIFFEID(agentID string) string {
-	return "spiffe://" + TrustDomain + "/agent/" + agentID
+	return agentIDPrefix + agentID
+}
+
+// AgentIDFromSPIFFEID is the inverse of SPIFFEID. It reports false unless id
+// is a swarm SPIFFE ID ending in a valid agent ID.
+func AgentIDFromSPIFFEID(id string) (string, bool) {
+	agentID, ok := strings.CutPrefix(id, agentIDPrefix)
+	return agentID, ok && ValidAgentID(agentID)
 }
 
 func agentURI(agentID string) (*url.URL, error) {

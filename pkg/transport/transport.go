@@ -7,11 +7,13 @@ import (
 	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"time"
 
+	"github.com/hamza-imran/zero-trust-swarm/pkg/pki"
 	"github.com/hamza-imran/zero-trust-swarm/pkg/protocol"
 )
 
@@ -20,11 +22,77 @@ const ProtocolPrefix = "SWARM-mTLS\n"
 // SwarmTLS holds the mTLS configuration for an agent.
 type SwarmTLS struct {
 	AgentID    string
-	TLSConfig *tls.Config
+	TLSConfig  *tls.Config
 	CACertPool *x509.CertPool
 }
 
+// NewTLSConfig returns the mTLS configuration every swarm workload uses:
+// TLS 1.3 only, client certificates required, and a peer is accepted only if
+// its certificate chains to caPool and carries a swarm SPIFFE ID.
+func NewTLSConfig(cert tls.Certificate, caPool *x509.CertPool) *tls.Config {
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ClientCAs:    caPool,
+		RootCAs:      caPool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		MinVersion:   tls.VersionTLS13,
+		// Peers are identified by SPIFFE ID, not by hostname, so Go's
+		// hostname check is replaced by VerifyConnection below.
+		InsecureSkipVerify: true, // #nosec G402 -- chain and SPIFFE ID are verified in VerifyConnection
+		VerifyConnection:   verifyPeer(caPool),
+	}
+}
 
+// verifyPeer checks the peer's chain against caPool and requires a SPIFFE ID.
+// It runs on both sides of every handshake.
+func verifyPeer(caPool *x509.CertPool) func(tls.ConnectionState) error {
+	return func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 {
+			return errors.New("no peer certificates presented")
+		}
+		opts := x509.VerifyOptions{
+			Roots:         caPool,
+			Intermediates: x509.NewCertPool(),
+			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		}
+		if _, err := cs.PeerCertificates[0].Verify(opts); err != nil {
+			return fmt.Errorf("certificate verification failed: %w", err)
+		}
+		_, err := PeerAgentID(cs)
+		return err
+	}
+}
+
+// PeerAgentID returns the agent ID from the SPIFFE ID in the peer's leaf
+// certificate. The leaf must carry exactly one URI SAN, and it must be
+// spiffe://swarm.local/agent/<valid agent ID>.
+func PeerAgentID(state tls.ConnectionState) (string, error) {
+	if len(state.PeerCertificates) == 0 {
+		return "", errors.New("no peer certificate")
+	}
+	uris := state.PeerCertificates[0].URIs
+	if len(uris) != 1 {
+		return "", fmt.Errorf("peer certificate has %d URI SANs, want exactly one SPIFFE ID", len(uris))
+	}
+	id, ok := pki.AgentIDFromSPIFFEID(uris[0].String())
+	if !ok {
+		return "", fmt.Errorf("peer URI %q is not a swarm SPIFFE ID", uris[0])
+	}
+	return id, nil
+}
+
+// VerifyPeerID returns an error unless the peer's certificate carries the
+// SPIFFE ID of agentID.
+func VerifyPeerID(state tls.ConnectionState, agentID string) error {
+	got, err := PeerAgentID(state)
+	if err != nil {
+		return err
+	}
+	if got != agentID {
+		return fmt.Errorf("peer is %s, want %s", pki.SPIFFEID(got), pki.SPIFFEID(agentID))
+	}
+	return nil
+}
 
 // swarmListener wraps a standard net.Listener to perform protocol prefix negotiation
 // and wrap incoming connections in TLS.
@@ -78,7 +146,9 @@ func (s *SwarmTLS) Listen(addr string) (net.Listener, error) {
 }
 
 // Dial connects to another agent at the given address using mTLS and protocol prefixing.
-func (s *SwarmTLS) Dial(addr string) (net.Conn, error) {
+// The peer must authenticate as peerID; any other identity is rejected
+// before anything is sent.
+func (s *SwarmTLS) Dial(addr, peerID string) (net.Conn, error) {
 	rawConn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("tcp dial failed: %w", err)
@@ -104,21 +174,22 @@ func (s *SwarmTLS) Dial(addr string) (net.Conn, error) {
 		tlsConn.Close()
 		return nil, fmt.Errorf("mTLS handshake failed: %w", err)
 	}
+	if err := VerifyPeerID(tlsConn.ConnectionState(), peerID); err != nil {
+		_ = tlsConn.Close()
+		return nil, fmt.Errorf("refusing peer at %s: %w", addr, err)
+	}
 
 	return tlsConn, nil
 }
 
-// ExtractPeerID extracts the SPIFFE identity or CommonName from a TLS connection.
+// ExtractPeerID returns the peer's SPIFFE ID, or "unknown" if its
+// certificate has none. There is no Common Name fallback.
 func ExtractPeerID(conn *tls.Conn) string {
-	state := conn.ConnectionState()
-	if len(state.PeerCertificates) > 0 {
-		peer := state.PeerCertificates[0]
-		if len(peer.URIs) > 0 {
-			return peer.URIs[0].String()
-		}
-		return peer.Subject.CommonName
+	id, err := PeerAgentID(conn.ConnectionState())
+	if err != nil {
+		return "unknown"
 	}
-	return "unknown"
+	return pki.SPIFFEID(id)
 }
 
 // VerifyPeerSignature checks that msg was signed by the key behind the peer's
