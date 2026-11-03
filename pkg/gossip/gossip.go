@@ -88,7 +88,7 @@ func (g *GossipEngine) gossipRandomPeer() {
 	target := peers[rand.Intn(len(peers))]
 
 	// Dial peer over mTLS
-	conn, err := g.SwarmTLS.Dial(target.Address)
+	conn, err := g.SwarmTLS.Dial(target.Address, target.AgentID)
 	if err != nil {
 		// log.Printf("⚠️ Gossip failed to dial %s: %v", target.AgentID, err)
 		return

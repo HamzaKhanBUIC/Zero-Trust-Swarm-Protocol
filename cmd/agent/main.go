@@ -80,30 +80,8 @@ func main() {
 	}
 
 	swarmTLS := &transport.SwarmTLS{
-		AgentID: *id,
-		TLSConfig: &tls.Config{
-			Certificates:       []tls.Certificate{cert},
-			ClientCAs:          caPool,
-			RootCAs:            caPool,
-			ClientAuth:         tls.RequireAndVerifyClientCert,
-			MinVersion:         tls.VersionTLS13,
-			InsecureSkipVerify: true,
-			VerifyConnection: func(cs tls.ConnectionState) error {
-				if len(cs.PeerCertificates) == 0 {
-					return fmt.Errorf("no peer certificates presented")
-				}
-				peerCert := cs.PeerCertificates[0]
-				opts := x509.VerifyOptions{
-					Roots:         caPool,
-					Intermediates: x509.NewCertPool(),
-					KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-				}
-				if _, err := peerCert.Verify(opts); err != nil {
-					return fmt.Errorf("certificate verification failed: %w", err)
-				}
-				return nil
-			},
-		},
+		AgentID:    *id,
+		TLSConfig:  transport.NewTLSConfig(cert, caPool),
 		CACertPool: caPool,
 	}
 	fmt.Println("🔐 Mutual TLS (mTLS 1.3) engine initialized in-memory.")
@@ -141,7 +119,7 @@ func main() {
 				caps[i] = strings.TrimSpace(caps[i])
 			}
 		}
-		
+
 		gEngine.UpdateLocal(registry.AgentRecord{
 			AgentID:      *id,
 			Address:      *listen,
@@ -208,10 +186,16 @@ func handleConnection(swarmTLS *transport.SwarmTLS, conn net.Conn, privKey *ecds
 		log.Printf("Read error: %v", err)
 		return
 	}
-	
+
 	// Cryptographic Integrity Check (fails closed)
 	if err := transport.VerifyPeerSignature(tlsConn.ConnectionState(), msg); err != nil {
 		log.Printf("❌ [INTEGRITY FAILURE] Payload signature invalid from %s: %v", peerID, err)
+		return
+	}
+
+	// Identity binding: the claimed sender must be the authenticated peer
+	if err := transport.VerifyPeerID(tlsConn.ConnectionState(), msg.From); err != nil {
+		log.Printf("⛔ [IDENTITY MISMATCH] %s sent a message claiming to be from %q: %v", peerID, msg.From, err)
 		return
 	}
 
@@ -276,7 +260,7 @@ func runHeartbeatLoop(swarmTLS *transport.SwarmTLS, regAddr, listenAddr string, 
 }
 
 func registerWithRegistry(swarmTLS *transport.SwarmTLS, regAddr, listenAddr string, caps []string, privKey *ecdsa.PrivateKey) {
-	conn, err := swarmTLS.Dial(regAddr)
+	conn, err := swarmTLS.Dial(regAddr, registry.ServiceID)
 	if err != nil {
 		log.Printf("⚠️ Registry heartbeat failed (could not connect): %v", err)
 		return
@@ -306,7 +290,7 @@ func registerWithRegistry(swarmTLS *transport.SwarmTLS, regAddr, listenAddr stri
 func executeTaskOnPeer(swarmTLS *transport.SwarmTLS, regAddr, capName, task string, privKey *ecdsa.PrivateKey, gEngine *gossip.GossipEngine) {
 	fmt.Printf("[4/4]🔍 Querying Registry for capability: %q\n", capName)
 
-	conn, err := swarmTLS.Dial(regAddr)
+	conn, err := swarmTLS.Dial(regAddr, registry.ServiceID)
 	if err != nil {
 		log.Fatalf("❌ Failed to connect to registry: %v", err)
 	}
@@ -342,8 +326,8 @@ func executeTaskOnPeer(swarmTLS *transport.SwarmTLS, regAddr, capName, task stri
 	// Add discovered peer to our gossip state
 	gEngine.UpdateLocal(*target)
 
-	// Dial target agent
-	peerConn, err := swarmTLS.Dial(target.Address)
+	// Dial target agent; the peer must prove it is target.AgentID
+	peerConn, err := swarmTLS.Dial(target.Address, target.AgentID)
 	if err != nil {
 		log.Fatalf("❌ Failed to connect to peer %s: %v", target.AgentID, err)
 	}
