@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"crypto"
 	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
@@ -70,7 +69,6 @@ func main() {
 
 	// Parse private key for payload signing
 	privKeyAny := cert.PrivateKey
-	_, ok := privKeyAny.(crypto.PrivateKey) // wait crypto.PrivateKey is an interface, let's cast directly to *ecdsa.PrivateKey
 	ecdsaPrivKey, ok := privKeyAny.(*ecdsa.PrivateKey)
 	if !ok {
 		log.Fatalf("❌ Private key is not ECDSA")
@@ -211,15 +209,10 @@ func handleConnection(swarmTLS *transport.SwarmTLS, conn net.Conn, privKey *ecds
 		return
 	}
 	
-	// Cryptographic Integrity Check
-	if len(tlsConn.ConnectionState().PeerCertificates) > 0 {
-		peerPubKey, ok := tlsConn.ConnectionState().PeerCertificates[0].PublicKey.(*ecdsa.PublicKey)
-		if ok {
-			if err := msg.Verify(peerPubKey); err != nil {
-				log.Printf("❌ [INTEGRITY FAILURE] Payload signature invalid from %s: %v", peerID, err)
-				return
-			}
-		}
+	// Cryptographic Integrity Check (fails closed)
+	if err := transport.VerifyPeerSignature(tlsConn.ConnectionState(), msg); err != nil {
+		log.Printf("❌ [INTEGRITY FAILURE] Payload signature invalid from %s: %v", peerID, err)
+		return
 	}
 
 	fmt.Printf("\n📨 [mTLS RECEIVED] from %s: type=%s, payload=%q\n", peerID, msg.Type, msg.Payload)

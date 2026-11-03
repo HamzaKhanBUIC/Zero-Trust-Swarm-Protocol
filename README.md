@@ -35,7 +35,7 @@ sequenceDiagram
     A->>B: TCP Connection + TLS 1.3 ClientHello (ALPN: ztsp/v1)
     B-->>A: ServerHello + Server Certificate (SPIFFE Validation)
     A-->>B: Client Certificate + CertificateVerify
-    Note over A,B: Mutual Authentication Verified (TLS_AES_256_GCM_SHA384)
+    Note over A,B: Mutual Authentication Verified (TLS 1.3)
     A->>B: Encrypted Payload + Injected W3C Trace Context Header
     B->>OTel: Export Attestation Event & Span Metrics
     B-->>A: Signed Acknowledgment Digest
@@ -45,7 +45,7 @@ sequenceDiagram
 
 ## Core Capabilities
 
-- **Strict mTLS 1.3 Handshakes**: Ciphers are restricted to `TLS_AES_256_GCM_SHA384` and `TLS_CHACHA20_POLY1305_SHA256` with forward secrecy (ECDHE).
+- **Strict mTLS 1.3 Handshakes**: Every connection requires TLS 1.3 (`MinVersion: tls.VersionTLS13`) and a client certificate (`RequireAndVerifyClientCert`). Go's `crypto/tls` chooses the TLS 1.3 cipher suite itself — all TLS 1.3 suites are AEAD with ephemeral key exchange, so forward secrecy is built in — and does not let you configure that list.
 - **SPIFFE Workload Attestation**: Enforces structured trust domains (`spiffe://swarm.local/agent/<agent-name>`) embedded in X.509 Subject Alternative Names (SANs).
 - **Distributed Observability**: Integrates OpenTelemetry W3C Trace Context directly into packet envelopes to track multi-agent execution traces.
 - **Python Client SDK (`sdk/python/`)**: Python bindings enabling LangGraph and AutoGen agents to establish mTLS channels with Go daemons.

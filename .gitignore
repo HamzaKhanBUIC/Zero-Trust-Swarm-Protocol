@@ -29,3 +29,7 @@ agentguidelines.md
 .certs/
 dashboard/node_modules/
 sidecar_queue.db
+
+# Python build artifacts
+__pycache__/
+*.pyc
